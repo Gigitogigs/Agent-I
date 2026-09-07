@@ -38,14 +38,14 @@ class AgentState(TypedDict):
     session_id: str
     thread_id: str
     user_id: str
-    query: str
-    risk_level: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
     customer_context: dict
-    
-    # Orchestration specific state
-    intent: Optional[Literal["faq", "order_action", "escalation"]]
-    urgency: Optional[str]
-    requires_human: Optional[bool]
+    risk_level: Optional[Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]]
+
+    # Kept for frontend consumption — populated from ToolMessage results after each tool call
     subagent_results: dict
+
+    # Set when a HITL interrupt has been triggered
     pending_approval: dict
+
+    # The agent that produced the result that triggered a guardrail escalation
     requesting_agent: Optional[str]

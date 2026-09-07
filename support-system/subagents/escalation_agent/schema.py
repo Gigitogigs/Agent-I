@@ -27,8 +27,36 @@
 #     - operator_note    : str | None  — optional note left by the operator
 #     - resolved_at      : datetime | None
 from datetime import datetime
-from typing import Optional
-from pydantic import BaseModel
+from typing import Optional, Any
+from pydantic import BaseModel, field_validator
+
+
+def _make_json_safe(obj: Any) -> Any:
+    """
+    Recursively converts non-JSON-serializable Python types to JSON-safe equivalents.
+
+    Handles sets and tuples (converted to lists), dicts (values recursed),
+    and lists (items recursed). All other types are returned unchanged.
+
+    This is needed because the Orchestrator LLM occasionally generates tool call
+    arguments containing set literals (e.g. {"item1", "item2"}) in dict fields,
+    which causes a TypeError in langchain_core's AIMessage JSON serialization
+    before the tool function even executes.
+
+    Args:
+        obj: Any Python value to sanitize.
+
+    Returns:
+        A JSON-serializable equivalent of the input.
+    """
+    if isinstance(obj, (set, tuple)):
+        return [_make_json_safe(i) for i in obj]
+    if isinstance(obj, dict):
+        return {k: _make_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_make_json_safe(i) for i in obj]
+    return obj
+
 
 class EscalationRequest(BaseModel):
     session_id: str
@@ -37,8 +65,27 @@ class EscalationRequest(BaseModel):
     payload: dict
     status: str = "pending"
     risk_level: str
-    expires_at: Optional[datetime] = None #TODO: add a default value later on. Make it so it dyanimcally set.
-    
+    expires_at: Optional[datetime] = None  # TODO: add a default value later on. Make it so it dynamically set.
+
+    @field_validator("payload", mode="before")
+    @classmethod
+    def sanitize_payload(cls, v: Any) -> Any:
+        """
+        Sanitizes the payload dict to ensure all values are JSON serializable.
+
+        The Orchestrator LLM may produce set or tuple literals inside the payload
+        (e.g. proposed_action: {action1, action2}). These are not JSON serializable
+        and crash langchain_core before the tool executes. This validator converts
+        them to lists recursively.
+
+        Args:
+            v: The raw payload value passed to the model.
+
+        Returns:
+            A JSON-safe dict.
+        """
+        return _make_json_safe(v) if isinstance(v, dict) else v
+
 
 class EscalationResults(BaseModel):
     id: str
