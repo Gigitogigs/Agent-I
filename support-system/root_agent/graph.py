@@ -35,8 +35,8 @@
 from typing import Literal, Optional
 
 from harness.model_factory import build_model, load_config
-from .tools.tool_registry import resolve_tools
 from .state import AgentState
+from .tools.tool_registry import resolve_tools
 from .guardrails.check import validate_action
 from .prompts.prompts import ORCHESTRATOR_SYSTEM_PROMPT, SYNTHESISE_SYSTEM_PROMPT
 
@@ -50,6 +50,9 @@ from langchain_core.runnables.config import RunnableConfig
 
 from langchain_core.messages import BaseMessage, SystemMessage, AIMessage, ToolMessage
 from subagents.escalation_agent.schema import EscalationRequest
+from subagents.action_agent.graph import invoke_action_agent
+from subagents.retrieval_agent.graph import invoke_retrieval_agent
+from subagents.escalation_agent.graph import invoke_escalation_agent
 
 # ---------------------------------------------------------------------------
 # Startup: build the LLM and bind tools from config
@@ -82,7 +85,7 @@ def load_memory(state: AgentState, config: RunnableConfig, store: BaseStore) -> 
     """
     user_id = state.get("user_id")
     namespace = ("customer_facts",)
-    item = store.get(namespace, user_id)
+    item = store.get(namespace, user_id) if user_id else None
     customer_context = item.value if item else {}
     return {"customer_context": customer_context}
 

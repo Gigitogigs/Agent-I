@@ -107,6 +107,9 @@ dependencies = [
     "python-dotenv>=1.2.3",
     "langchain-text-splitters>=1.1.2",
     "mcp>=2.1.1",
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.52.4",
+    "psycopg2-binary>=2.9.13",
 ]
 
 [tool.hatch.build.targets.wheel]

@@ -1,0 +1,7 @@
+get_order_status: low
+get_order_history: low
+get_account_details: low
+get_billing_details: low
+update_shipping_address: medium
+cancel_order: high
+issue_refund: high

@@ -66,14 +66,12 @@ llm = build_model(escalation_config)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 redis_client = redis.Redis.from_url(REDIS_URL)
 
-DB_URL = os.getenv("DB_URL")
+import sys
+import os
 
-_conn = None
-def get_db_connection():
-    global _conn
-    if _conn is None:
-        _conn = psycopg2.connect(DB_URL)
-    return _conn
+# Ensure imports resolve to our project roots
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+from approvals.app.db import get_conn, release_conn
 
 
 
@@ -92,7 +90,7 @@ def create_checkpoint(state: AgentState, config: RunnableConfig):
     langgraph_checkpoint_id = config["configurable"]["checkpoint_id"]
     #TODO: Connect to Postgres and INSERT INTO approvals table
     #Use req.risk_level, req.risk_reason, req.sla_seconds, etc
-    conn = get_db_connection()
+    conn = get_conn()
     cur = conn.cursor()
     try:
         cur.execute(
@@ -129,6 +127,7 @@ def create_checkpoint(state: AgentState, config: RunnableConfig):
         raise e
     finally:
         cur.close()
+        release_conn(conn)
     
     results = EscalationResults(
         id = str(generated_id),
@@ -200,7 +199,7 @@ def apply_decision(state: AgentState):
     status = results.status
     resolved_at = results.resolved_at
 
-    conn = get_db_connection()
+    conn = get_conn()
     cur = conn.cursor()
     try:
         cur.execute(
@@ -222,6 +221,7 @@ def apply_decision(state: AgentState):
         raise e
     finally:
         cur.close()
+        release_conn(conn)
 
 
     return {"escalation_results": results}
@@ -271,8 +271,9 @@ def invoke_escalation_agent(request: EscalationRequest) -> EscalationResults:
         "messages": []
     }
     
-    # We must pass a thread_id in the config so the checkpointer can save the interrupt state
-    config = {"configurable": {"thread_id": request.session_id}}
+    # We must pass a thread_id in the config so the checkpointer can save the interrupt state.
+    # Using checkpoint_ns isolates this subagent's memory from the orchestrator's memory.
+    config = {"configurable": {"thread_id": request.session_id, "checkpoint_ns": "escalation_agent"}}
     
     result_state = escalation_agent.invoke(initial_state, config=config)
     

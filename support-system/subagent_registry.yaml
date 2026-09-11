@@ -3,7 +3,7 @@ orchestrator:
     model: qwen3.5:9b
     temperature: 1.0
     base_url: http://127.0.0.1:11434
-    tools: [retrieval_agent, escalation_agent, action_agent]
+    tools: [retrieval_agent, escalation_agent, action_agent, inventory_agent]
     
 subagents:
     retrieval_agent:
@@ -17,11 +17,17 @@ subagents:
         model: qwen3:4b
         temperature: 1.0
         base_url: http://127.0.0.1:11434
+        mcp_server: order_account_mcp
+
+    inventory_agent:
+        provider: ollama
+        model: qwen3:4b
+        temperature: 1.0
+        base_url: http://127.0.0.1:11434
+        mcp_server: inventory_mcp
 
     escalation_agent:
         provider: ollama
         model: qwen3:4b
         temperature: 1.0
         base_url: http://127.0.0.1:11434
-
-    

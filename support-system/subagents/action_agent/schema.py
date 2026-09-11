@@ -27,12 +27,12 @@
 #     - idempotency_key : str          — echoed back so the Orchestrator can log it
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict, Any
 
 
 class ActionRequest(BaseModel):
     action_type: str
-    params: dict
+    params: Dict[str, Any]
     session_id: str
     turn_id: str
     risk_level: str = "low"
@@ -40,7 +40,7 @@ class ActionRequest(BaseModel):
 
 class ActionResult(BaseModel):
     success: bool
-    data: Optional[dict] = None
+    data: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     needs_approval: bool = False
     idempotency_key: str

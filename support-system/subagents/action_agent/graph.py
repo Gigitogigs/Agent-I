@@ -17,14 +17,10 @@
 # Node layout (high-level):
 #   1. validate_params  — schema-validate incoming action params; reject malformed
 #                         requests before they reach external systems
-#   2. guardrail_check  — assess risk level of the proposed action:
-#                           LOW  (read-only, e.g. get_order) → proceed autonomously
-#                           MEDIUM/HIGH (mutating, e.g. issue_refund) → route to
-#                           guardrail layer; HIGH actions trigger HITL interrupt
-#   3. execute_tool     — call the appropriate Tool Layer adapter with an
+#   2. execute_tool     — call the appropriate Tool Layer adapter with an
 #                         idempotency key (session_id + turn_id + action_type) to
 #                         prevent double-execution on retries
-#   4. handle_result    — map the external system response to a structured
+#   3. handle_result    — map the external system response to a structured
 #                         AgentResult and surface any errors with retry logic
 #                         (exponential backoff, bounded retries)
 #
@@ -37,18 +33,21 @@
 #   Each tool is tagged with a risk level; the Tool Layer rejects any call to
 #   a tool not on this agent's allowlist, independent of what the LLM decides.
 
+import sys
+import os
+import json
+import yaml
+
 from typing import TypedDict, Optional
 from langgraph.graph import StateGraph, START, END
 from langchain_core.tools import tool
-import sys
-import os
 
 from .schema import ActionRequest, ActionResult
 
 # Ensure imports resolve to our project roots
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-from guardrails.handrolled.risk_policy import get_risk_tier
-from mcp_gateway.client import MCPToolClient
+from mcp_client.client import MCPToolClient
+from approvals.app.db import get_conn, release_conn
 
 
 class AgentState(TypedDict):
@@ -64,25 +63,6 @@ def validate_params(state: AgentState) -> dict:
     return state
 
 
-def guardrail_check(state: AgentState) -> dict:
-    """Assess the risk level of the proposed action using authoritative policy."""
-    req = state["request"]
-    
-    authoritative_risk = get_risk_tier(req.action_type)
-    
-    # If medium/high risk, signal that it needs approval instead of executing
-    if authoritative_risk in ["medium", "high", "critical"]:
-        result = ActionResult(
-            success=False,
-            needs_approval=True,
-            idempotency_key=f"{req.session_id}:{req.turn_id}:{req.action_type}",
-            error=f"Action requires human approval (risk tier: {authoritative_risk})."
-        )
-        return {"result": result}
-        
-    return state
-
-
 def execute_tool(state: AgentState) -> dict:
     """Execute the domain-specific tool via the MCP Tool Layer, ensuring idempotency."""
     req = state["request"]
@@ -93,17 +73,87 @@ def execute_tool(state: AgentState) -> dict:
 
     idempotency_key = f"{req.session_id}:{req.turn_id}:{req.action_type}"
     
-    # TODO: Implement database transaction for idempotency
-    # BEGIN
-    # INSERT INTO approvals.executed_actions (idempotency_key, session_id, turn_id, action_type, payload, status) 
-    #        VALUES (...) ON CONFLICT DO NOTHING
-    # IF inserted:
+    conn = get_conn()
+    cur = conn.cursor()
     
-    client = MCPToolClient()
-    mcp_result = client.call(req.action_type, req.params)
+    try:
+        cur.execute(
+            """
+            INSERT INTO approvals.executed_actions (idempotency_key, session_id, turn_id, action_type, payload, status)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (idempotency_key) DO NOTHING
+            RETURNING idempotency_key
+            """,
+            (idempotency_key, req.session_id, req.turn_id, req.action_type, json.dumps(req.params), 'pending')
+        )
+        if cur.fetchone() is None:
+            # Action already executed in a previous attempt
+            conn.rollback()
+            cur.close()
+            release_conn(conn)
+            result = ActionResult(
+                success=True,
+                data={"status": "skipped", "reason": "already executed"},
+                needs_approval=False,
+                idempotency_key=idempotency_key
+            )
+            return {"result": result}
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        cur.close()
+        release_conn(conn)
+        raise e
+
+    # Look up the target MCP server from the registry config
+    registry_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'subagent_registry.yaml'))
+    with open(registry_path, "r") as f:
+        registry = yaml.safe_load(f)
     
-    #    UPDATE approvals.executed_actions SET status = 'completed' WHERE idempotency_key = ...
-    # COMMIT
+    server_dir = registry["subagents"]["action_agent"].get("mcp_server", "order_account_mcp")
+    server_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'mcp_servers', server_dir, 'server.py'))
+    
+    # Inject idempotency_key for mutating operations
+    if req.action_type in ["issue_refund", "cancel_order", "update_shipping_address", "reserve_stock", "update_stock_count"]:
+        req.params["idempotency_key"] = idempotency_key
+
+    try:
+        client = MCPToolClient(server_path=server_path)
+        mcp_result = client.call(req.action_type, req.params)
+    except Exception as e:
+        try:
+            cur.execute(
+                "UPDATE approvals.executed_actions SET status = 'failed' WHERE idempotency_key = %s",
+                (idempotency_key,)
+            )
+            conn.commit()
+        except Exception as inner_e:
+            conn.rollback()
+        finally:
+            cur.close()
+            release_conn(conn)
+            
+        result = ActionResult(
+            success=False,
+            needs_approval=False,
+            idempotency_key=idempotency_key,
+            error=str(e)
+        )
+        return {"result": result}
+    
+    # Update status to completed
+    try:
+        cur.execute(
+            "UPDATE approvals.executed_actions SET status = 'completed' WHERE idempotency_key = %s",
+            (idempotency_key,)
+        )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        cur.close()
+        release_conn(conn)
     
     result = ActionResult(
         success=mcp_result.get("success", False),
@@ -131,13 +181,11 @@ def handle_result(state: AgentState) -> dict:
 # Build the Action Agent graph
 builder = StateGraph(AgentState)
 builder.add_node("validate_params", validate_params)
-builder.add_node("guardrail_check", guardrail_check)
 builder.add_node("execute_tool", execute_tool)
 builder.add_node("handle_result", handle_result)
 
 builder.add_edge(START, "validate_params")
-builder.add_edge("validate_params", "guardrail_check")
-builder.add_edge("guardrail_check", "execute_tool")
+builder.add_edge("validate_params", "execute_tool")
 builder.add_edge("execute_tool", "handle_result")
 builder.add_edge("handle_result", END)
 

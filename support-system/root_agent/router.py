@@ -45,8 +45,8 @@ from pydantic import BaseModel, Field
 from typing import Literal
 
 class RouterDecision(BaseModel):
-    intent: Literal["faq", "order_action", "escalation"] = Field(
-        description="The classified intent of the user's message."
+    intents: list[Literal["faq", "order_action", "escalation"]] = Field(
+        description="The classified intents of the user's message. Return multiple if they ask for multiple distinct actions."
     )
     urgency: str = Field(
         description="The urgency of the request (e.g. LOW, HIGH)."
@@ -62,7 +62,7 @@ def get_router_decision(llm, message: str) -> RouterDecision:
     structured_llm = llm.with_structured_output(RouterDecision)
     prompt = (
         "You are an intent classification router. You MUST output a JSON object matching the exact schema.\n"
-        "Classify the following customer support message into one of three intents: 'faq', 'order_action', or 'escalation'.\n"
+        "Classify the following customer support message into one or more of three intents: 'faq', 'order_action', or 'escalation'.\n"
         "Also determine urgency (LOW, MEDIUM, HIGH, CRITICAL) and whether it requires a human.\n\n"
         f"Message: {message}"
     )
