@@ -34,7 +34,6 @@
 from typing import Annotated, Literal
 
 from harness.model_factory import build_model, load_config
-from .tools.tool_registry import resolve_tools
 from .state import AgentState
 from .router import get_router_decision
 from .guardrails.check import validate_action
@@ -53,17 +52,12 @@ from pydantic import BaseModel, Field
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 
 from subagents.escalation_agent.schema import EscalationRequest
+from subagents.action_agent.graph import invoke_action_agent
+from subagents.retrieval_agent.graph import invoke_retrieval_agent
+from subagents.escalation_agent.graph import invoke_escalation_agent
 
 root_config = load_config()["orchestrator"]
 llm = build_model(root_config)
-llm_with_tools = resolve_tools(root_config["tools"])
-
-def get_tool(name: str):
-    """Look up a tool from llm_with_tools by its registered name."""
-    for t in llm_with_tools:
-        if t.name == name:
-            return t
-    raise KeyError(f"Tool '{name}' not found in the tool registry.")
 
 
 def load_memory(state: AgentState, config: RunnableConfig, store: BaseStore):
@@ -71,57 +65,77 @@ def load_memory(state: AgentState, config: RunnableConfig, store: BaseStore):
     Loads session and long-term customer context into the AgentState. this happens before intent classification
     """
     user_id = state.get("user_id")
-    session_id = state.get("session_id")
-    thread_id = state.get("thread_id")
+    customer_context = {}
     
-    #fetch long-term context from the store using a "customer_facts" namespace
-    namespace = ("customer_facts",)
-    item = store.get(namespace, user_id)
-    
-    customer_context = item.value if item else {}
-    
+    if user_id:
+        namespace = ("customer_facts",)
+        item = store.get(namespace, user_id)
+        if item:
+            customer_context = item.value
+            
     return {"customer_context": customer_context}
 
 def classify_intent(state: AgentState):
     messages = state["messages"]
     last_message = messages[-1].content
     decision = get_router_decision(llm, last_message)
-    return {
-        "intent": decision.intent,
-        "urgency": decision.urgency,
-        "requires_human": decision.requires_human
-    }
-
-def route_to_subagent(state: AgentState):
-    intent = state.get("intent")
-    if state.get("requires_human") or intent == "escalation":
-        return "run_escalation_agent"
-    if intent == "order_action":
-        return "run_action_agent"
-    return "run_retrieval_agent"
-
-def run_retrieval_agent(state: AgentState):
-    prior_messages = state["messages"][:-1]
+    
+    prior_messages = messages[:-1]
     context_slice = [
         f"{msg.type}: {msg.content}"
         for msg in prior_messages[-4:]
     ]
+    
+    return {
+        "intents": decision.intents,
+        "urgency": decision.urgency,
+        "requires_human": decision.requires_human,
+        "context_slice": context_slice
+    }
 
-    retrieval_agent = get_tool("retrieval_agent")
-    result = retrieval_agent.invoke({
+def route_to_subagent(state: AgentState) -> list[str]:
+    # NOTE: This plain-list routing is an intentional stepping stone. 
+    # Target for Phase 5+ is a registry-driven Send fan-out architecture which will allow parameterized instances.
+    intents = state.get("intents", [])
+    if state.get("requires_human") or "escalation" in intents:
+        return ["run_escalation_agent"]
+        
+    next_nodes = []
+    if "order_action" in intents:
+        next_nodes.append("guardrail_check")
+    if "faq" in intents or not next_nodes:
+        next_nodes.append("run_retrieval_agent")
+        
+    return list(set(next_nodes))
+
+def run_retrieval_agent(state: AgentState):
+    result = invoke_retrieval_agent.invoke({
         "query": state["messages"][-1].content,
-        "context_slice": context_slice,
+        "context_slice": state.get("context_slice", []),
         "filters": state.get("customer_context", {}).get("preferences")
     })
     return {"subagent_results": {"retrieval": {"answer": result.answer, "source_chunks": result.source_chunks}}}
 
 def run_action_agent(state: AgentState):
-    # TODO: Wire up action_agent tool once implemented
-    result = {"action": "mock_refund", "refund_amount": 150}
-    return {"subagent_results": {"action": result}}
+    # TODO: In a fully wired system, action_type and params should be extracted 
+    # from the LLM's tool call request (state["messages"][-1].tool_calls).
+    # For now, pass a placeholder based on intent to wire up the system
+    action_type = "issue_refund"
+    params = {"order_id": "12345", "amount": 150.0, "reason": "Customer request"}
+    
+    result = invoke_action_agent.invoke({
+        "action_type": action_type,
+        "params": params,
+        "session_id": state["session_id"],
+        "turn_id": f"turn_{len(state['messages'])}",
+        "risk_level": state.get("risk_level", "low")
+    })
+    
+    # action_tool returns an ActionResult. Dump it to a dict for the state
+    action_data = result.model_dump() if hasattr(result, 'model_dump') else result
+    return {"subagent_results": {"action": action_data}}
 
 def run_escalation_agent(state: AgentState):
-    escalation_tool = get_tool("escalation_agent")
     last_message = state["messages"][-1].content
 
     # Pattern 2: Use the dynamic requesting_agent, fallback to orchestrator
@@ -138,25 +152,31 @@ def run_escalation_agent(state: AgentState):
         risk_level=state.get("risk_level", "HIGH").lower(),
     )
 
-    result = escalation_tool.invoke({"request": request})
+    result = invoke_escalation_agent.invoke({"request": request})
     return {"subagent_results": {"escalation": {"status": result.status, "id": result.id}}}
 
 def guardrail_check(state: AgentState):
-    results = state.get("subagent_results", {})
-    action_payload = results.get("action", {})
+    # TODO: In a fully wired system, extract the action_payload from the LLM tool call in state
+    # For now, we mock the payload that is about to be sent to the action agent
+    action_payload = {"action_type": "issue_refund", "params": {"order_id": "12345", "amount": 150.0, "reason": "Customer request"}}
     risk = validate_action(action_payload)
+    
+    if risk in ("HIGH", "CRITICAL"):
+        operator_decision = interrupt(f"Awaiting human approval for risk: {risk}")
+        if isinstance(operator_decision, dict) and operator_decision.get("status") != "approved":
+            return {
+                "risk_level": risk, 
+                "requesting_agent": "action_agent",
+                "subagent_results": {"action": {"success": False, "error": "Human operator rejected the action."}}
+            }
 
-    requesting_agent = None
-    if results:
-        first_key = next(iter(results.keys()))
-        requesting_agent = f"{first_key}_agent"
-
-    return {"risk_level": risk, "requesting_agent": requesting_agent}
+    return {"risk_level": risk, "requesting_agent": "action_agent"}
 
 def route_after_guardrail(state: AgentState):
-    if state.get("risk_level") in ("HIGH", "CRITICAL"):
-        return "run_escalation_agent"
-    return "synthesise"
+    results = state.get("subagent_results", {})
+    if results and results.get("action", {}).get("success") is False:
+        return "synthesise"
+    return "run_action_agent"
 
 def synthesise(state: AgentState):
     messages = state["messages"]
@@ -182,22 +202,22 @@ builder.add_conditional_edges(
     route_to_subagent,
     {
         "run_retrieval_agent": "run_retrieval_agent",
-        "run_action_agent": "run_action_agent",
+        "guardrail_check": "guardrail_check",
         "run_escalation_agent": "run_escalation_agent"
     }
 )
-builder.add_edge("run_retrieval_agent", "guardrail_check")
-builder.add_edge("run_action_agent", "guardrail_check")
-builder.add_edge("run_escalation_agent", "synthesise")
+builder.add_edge("run_retrieval_agent", "synthesise")
 
 builder.add_conditional_edges(
     "guardrail_check",
     route_after_guardrail,
     {
         "run_escalation_agent": "run_escalation_agent",
-        "synthesise": "synthesise"
+        "run_action_agent": "run_action_agent"
     }
 )
+builder.add_edge("run_action_agent", "synthesise")
+builder.add_edge("run_escalation_agent", "synthesise")
 builder.add_edge("synthesise", END)
 
 # Compile using checkpointer and store

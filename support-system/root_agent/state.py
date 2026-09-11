@@ -33,6 +33,15 @@ from typing import Annotated, Literal, Any, Optional, TypedDict
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
+def merge_results(left: dict, right: dict) -> dict:
+    if not left:
+        return right if right else {}
+    if not right:
+        return left
+    merged = left.copy()
+    merged.update(right)
+    return merged
+
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
     session_id: str
@@ -43,9 +52,10 @@ class AgentState(TypedDict):
     customer_context: dict
     
     # Orchestration specific state
-    intent: Optional[Literal["faq", "order_action", "escalation"]]
+    intents: Optional[list[str]]
     urgency: Optional[str]
     requires_human: Optional[bool]
-    subagent_results: dict
+    context_slice: list[str]
+    subagent_results: Annotated[dict, merge_results]
     pending_approval: dict
     requesting_agent: Optional[str]
