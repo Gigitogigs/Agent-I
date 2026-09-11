@@ -17,14 +17,10 @@
 # Node layout (high-level):
 #   1. validate_params  — schema-validate incoming action params; reject malformed
 #                         requests before they reach external systems
-#   2. guardrail_check  — assess risk level of the proposed action:
-#                           LOW  (read-only, e.g. get_order) → proceed autonomously
-#                           MEDIUM/HIGH (mutating, e.g. issue_refund) → route to
-#                           guardrail layer; HIGH actions trigger HITL interrupt
-#   3. execute_tool     — call the appropriate Tool Layer adapter with an
+#   2. execute_tool     — call the appropriate Tool Layer adapter with an
 #                         idempotency key (session_id + turn_id + action_type) to
 #                         prevent double-execution on retries
-#   4. handle_result    — map the external system response to a structured
+#   3. handle_result    — map the external system response to a structured
 #                         AgentResult and surface any errors with retry logic
 #                         (exponential backoff, bounded retries)
 #

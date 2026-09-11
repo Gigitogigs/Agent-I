@@ -7,224 +7,320 @@
 #   conversation from start to finish. This is the top-level execution
 #   entry point — the FastAPI gateway invokes this graph per incoming turn.
 #
-# Node layout (high-level):
-#   1. load_memory      — load session memory + long-term customer context
-#   2. classify_intent  — call router.py to determine which subagent handles this turn
-#   3. run_subagent     — fan out to retrieval_agent, action_agent, or
-#                         escalation_agent depending on the routing decision;
-#                         read-only subagents (RAG + order lookup) may run in
-#                         parallel, mutating actions are always serialised
-#   4. guardrail_check  — validate proposed action / model output before
-#                         committing; may trigger an interrupt (HITL) if risk is HIGH
-#   5. synthesise       — combine subagent results into a final reply for the customer
-#   6. persist_memory   — write updated session memory and (end-of-conversation)
-#                         long-term memory to Postgres
-#   7. emit_trace       — fire Langfuse spans for this turn (async, fire-and-forget)
+# Architecture (ReAct tool-calling loop):
+#   1. load_memory        — load session memory + long-term customer context
+#   2. orchestrator_agent — the LLM with bound tools decides what to do next:
+#                           it either calls a subagent tool or produces a final reply
+#   3. guardrail_check    — if the LLM requested a tool call, inspect the call's
+#                           arguments for risk; HIGH-risk calls are intercepted and
+#                           rerouted to escalation_agent for HITL approval
+#   4. execute_tools      — run the (possibly modified) tool call via ToolNode;
+#                           results are appended as ToolMessages and merged into
+#                           subagent_results for frontend consumption
+#   ↺ loop back to orchestrator_agent — the LLM sees the ToolMessage result and
+#                           decides whether to call another tool or reply directly
+#   5. synthesise         — reached when no more tool calls are needed;
+#                           combines all ToolMessage results into a final customer reply
 #
 # HITL interrupt:
-#   If guardrail_check flags a HIGH-risk action, the graph calls LangGraph's
-#   interrupt() at that node. Execution fully pauses; the checkpointer saves
-#   state to Postgres. The graph resumes when an operator decision arrives
-#   via the approval endpoint (Redis pub/sub → graph.resume()).
+#   If guardrail_check flags a HIGH-risk tool call, the escalation_agent is
+#   invoked instead. The escalation_agent calls LangGraph's interrupt(), which
+#   fully pauses execution and saves state to Postgres. The graph resumes when
+#   an operator decision arrives via the approval endpoint.
 #
 # Checkpointer:
-#   Wired in at graph compile time using the PostgresSaver from
-#   memory/checkpointer.py. Every node boundary is a potential resume point.
+#   Wired in at compile time via PostgresSaver from memory/checkpointer.py.
+#   Every node boundary is a potential resume point.
 
-from typing import Annotated, Literal
+from typing import Literal, Optional
 
 from harness.model_factory import build_model, load_config
 from .state import AgentState
-from .router import get_router_decision
+from .tools.tool_registry import resolve_tools
 from .guardrails.check import validate_action
-from .prompts.prompts import SYNTHESISE_SYSTEM_PROMPT
+from .prompts.prompts import ORCHESTRATOR_SYSTEM_PROMPT, SYNTHESISE_SYSTEM_PROMPT
 
-from langgraph.types import interrupt
 from langgraph.graph import StateGraph, START, END
+from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.postgres import PostgresSaver
-from langgraph.checkpoint.memory import InMemorySaver
 from memory.checkpointer import get_checkpointer
 from memory.store import get_store
 from langgraph.store.base import BaseStore
 from langchain_core.runnables.config import RunnableConfig
-from pydantic import BaseModel, Field
 
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
-
+from langchain_core.messages import BaseMessage, SystemMessage, AIMessage, ToolMessage
 from subagents.escalation_agent.schema import EscalationRequest
 from subagents.action_agent.graph import invoke_action_agent
 from subagents.retrieval_agent.graph import invoke_retrieval_agent
 from subagents.escalation_agent.graph import invoke_escalation_agent
 
+# ---------------------------------------------------------------------------
+# Startup: build the LLM and bind tools from config
+# ---------------------------------------------------------------------------
+
 root_config = load_config()["orchestrator"]
 llm = build_model(root_config)
+tools = resolve_tools(root_config["tools"])
+llm_with_tools = llm.bind_tools(tools)
 
 
-def load_memory(state: AgentState, config: RunnableConfig, store: BaseStore):
+# ---------------------------------------------------------------------------
+# Node: load_memory
+# ---------------------------------------------------------------------------
+
+def load_memory(state: AgentState, config: RunnableConfig, store: BaseStore) -> dict:
     """
-    Loads session and long-term customer context into the AgentState. this happens before intent classification
+    Loads long-term customer context into AgentState before intent processing.
+
+    Retrieves any previously stored customer facts (preferences, history) from
+    the persistent PostgresStore using the user_id as the lookup key.
+
+    Args:
+        state: The current AgentState for this conversation thread.
+        config: LangGraph RunnableConfig carrying thread/session metadata.
+        store: The LangGraph BaseStore (backed by Postgres) for long-term memory.
+
+    Returns:
+        dict: State update containing 'customer_context'.
     """
     user_id = state.get("user_id")
-    customer_context = {}
-    
-    if user_id:
-        namespace = ("customer_facts",)
-        item = store.get(namespace, user_id)
-        if item:
-            customer_context = item.value
-            
+    namespace = ("customer_facts",)
+    item = store.get(namespace, user_id) if user_id else None
+    customer_context = item.value if item else {}
     return {"customer_context": customer_context}
 
-def classify_intent(state: AgentState):
-    messages = state["messages"]
-    last_message = messages[-1].content
-    decision = get_router_decision(llm, last_message)
-    
-    prior_messages = messages[:-1]
-    context_slice = [
-        f"{msg.type}: {msg.content}"
-        for msg in prior_messages[-4:]
-    ]
-    
-    return {
-        "intents": decision.intents,
-        "urgency": decision.urgency,
-        "requires_human": decision.requires_human,
-        "context_slice": context_slice
-    }
 
-def route_to_subagent(state: AgentState) -> list[str]:
-    # NOTE: This plain-list routing is an intentional stepping stone. 
-    # Target for Phase 5+ is a registry-driven Send fan-out architecture which will allow parameterized instances.
-    intents = state.get("intents", [])
-    if state.get("requires_human") or "escalation" in intents:
-        return ["run_escalation_agent"]
-        
-    next_nodes = []
-    if "order_action" in intents:
-        next_nodes.append("guardrail_check")
-    if "faq" in intents or not next_nodes:
-        next_nodes.append("run_retrieval_agent")
-        
-    return list(set(next_nodes))
+# ---------------------------------------------------------------------------
+# Node: orchestrator_agent
+# ---------------------------------------------------------------------------
 
-def run_retrieval_agent(state: AgentState):
-    result = invoke_retrieval_agent.invoke({
-        "query": state["messages"][-1].content,
-        "context_slice": state.get("context_slice", []),
-        "filters": state.get("customer_context", {}).get("preferences")
-    })
-    return {"subagent_results": {"retrieval": {"answer": result.answer, "source_chunks": result.source_chunks}}}
+def orchestrator_agent(state: AgentState) -> dict:
+    """
+    The core reasoning node of the Orchestrator.
 
-def run_action_agent(state: AgentState):
-    # TODO: In a fully wired system, action_type and params should be extracted 
-    # from the LLM's tool call request (state["messages"][-1].tool_calls).
-    # For now, pass a placeholder based on intent to wire up the system
-    action_type = "issue_refund"
-    params = {"order_id": "12345", "amount": 150.0, "reason": "Customer request"}
-    
-    result = invoke_action_agent.invoke({
-        "action_type": action_type,
-        "params": params,
-        "session_id": state["session_id"],
-        "turn_id": f"turn_{len(state['messages'])}",
-        "risk_level": state.get("risk_level", "low")
-    })
-    
-    # action_tool returns an ActionResult. Dump it to a dict for the state
-    action_data = result.model_dump() if hasattr(result, 'model_dump') else result
-    return {"subagent_results": {"action": action_data}}
+    Invokes the LLM with all registered subagent tools bound to it. The LLM
+    receives the full conversation history plus a system prompt describing the
+    tool-use policy. It either:
+      - Returns an AIMessage with tool_calls (→ graph routes to guardrail_check)
+      - Returns a plain AIMessage with no tool_calls (→ graph routes to synthesise)
 
-def run_escalation_agent(state: AgentState):
-    last_message = state["messages"][-1].content
+    Args:
+        state: The current AgentState containing messages and customer_context.
 
-    # Pattern 2: Use the dynamic requesting_agent, fallback to orchestrator
-    agent_id = state.get("requesting_agent") or "orchestrator"
-    
-    # If routed here from intent, it's handoff. If from guardrail, it's approval.
-    action_type = "human_handoff" if agent_id == "orchestrator" else "hitl_approval"
-
-    request = EscalationRequest(
-        session_id=state["session_id"],
-        agent_id=agent_id,
-        action_type=action_type,
-        payload={"query": last_message, "context": state.get("customer_context", {})},
-        risk_level=state.get("risk_level", "HIGH").lower(),
+    Returns:
+        dict: State update containing the new AIMessage appended to 'messages'.
+    """
+    system_prompt = ORCHESTRATOR_SYSTEM_PROMPT.format(
+        customer_context=state.get("customer_context", {})
     )
+    messages = [SystemMessage(content=system_prompt)] + state["messages"]
+    response = llm_with_tools.invoke(messages)
+    return {"messages": [response]}
 
-    result = invoke_escalation_agent.invoke({"request": request})
-    return {"subagent_results": {"escalation": {"status": result.status, "id": result.id}}}
 
-def guardrail_check(state: AgentState):
-    # TODO: In a fully wired system, extract the action_payload from the LLM tool call in state
-    # For now, we mock the payload that is about to be sent to the action agent
-    action_payload = {"action_type": "issue_refund", "params": {"order_id": "12345", "amount": 150.0, "reason": "Customer request"}}
-    risk = validate_action(action_payload)
-    
+# ---------------------------------------------------------------------------
+# Node: guardrail_check
+# ---------------------------------------------------------------------------
+
+def guardrail_check(state: AgentState) -> dict:
+    """
+    Inspects the LLM's pending tool call for risk before execution.
+
+    Reads the tool_calls from the last AIMessage in the conversation. If the
+    intended tool is the action_agent, the call's params are passed through
+    validate_action() to determine risk level. For HIGH or CRITICAL risk, the
+    tool call is overridden — the last AIMessage is replaced with one that
+    calls escalation_agent instead, and the state is updated to record the
+    risk level and the original requesting agent.
+
+    For retrieval_agent and escalation_agent calls, or LOW/MEDIUM action_agent
+    calls, the state is passed through unchanged.
+
+    Args:
+        state: The current AgentState. The last message must be an AIMessage
+               with at least one tool_call.
+
+    Returns:
+        dict: State update. May modify 'messages', 'risk_level', and
+              'requesting_agent' if a high-risk intercept occurs.
+    """
+    last_message = state["messages"][-1]
+
+    # Safety check — should always be an AIMessage with tool_calls here
+    if not isinstance(last_message, AIMessage) or not last_message.tool_calls:
+        return {}
+
+    tool_call = last_message.tool_calls[0]
+    tool_name = tool_call["name"]
+    tool_args = tool_call.get("args", {})
+
+    # Only action_agent calls need risk evaluation
+    if tool_name != "action_agent":
+        return {}
+
+    risk = validate_action(tool_args.get("params", {}))
+
     if risk in ("HIGH", "CRITICAL"):
-        operator_decision = interrupt(f"Awaiting human approval for risk: {risk}")
-        if isinstance(operator_decision, dict) and operator_decision.get("status") != "approved":
-            return {
-                "risk_level": risk, 
-                "requesting_agent": "action_agent",
-                "subagent_results": {"action": {"success": False, "error": "Human operator rejected the action."}}
-            }
+        # Build an escalation request from the guardrail intercept
+        escalation_args = {
+            "request": EscalationRequest(
+                session_id=state.get("session_id", "unknown"),
+                agent_id="action_agent",
+                action_type="hitl_approval",
+                payload=tool_args,
+                risk_level=risk.lower(),
+            ).model_dump()
+        }
 
-    return {"risk_level": risk, "requesting_agent": "action_agent"}
+        # Replace the pending tool call with an escalation_agent call
+        override_message = AIMessage(
+            content="",
+            tool_calls=[{
+                "id": tool_call["id"],
+                "name": "escalation_agent",
+                "args": escalation_args,
+            }]
+        )
 
-def route_after_guardrail(state: AgentState):
-    results = state.get("subagent_results", {})
-    if results and results.get("action", {}).get("success") is False:
-        return "synthesise"
-    return "run_action_agent"
+        return {
+            "messages": [override_message],
+            "risk_level": risk,
+            "requesting_agent": "action_agent",
+        }
 
-def synthesise(state: AgentState):
+    return {"risk_level": risk}
+
+
+# ---------------------------------------------------------------------------
+# Node: execute_tools (ToolNode wrapper that also populates subagent_results)
+# ---------------------------------------------------------------------------
+
+def build_execute_tools_node(tool_list: list):
+    """
+    Factory that creates an execute_tools node wrapping LangGraph's ToolNode.
+
+    After the underlying ToolNode executes the tool, this wrapper extracts
+    the result from each ToolMessage and merges it into 'subagent_results'
+    keyed by tool name, so the frontend can consume structured results
+    independently of the raw message stream.
+
+    Args:
+        tool_list: List of registered tool callables to expose to ToolNode.
+
+    Returns:
+        Callable: A node function compatible with StateGraph.add_node().
+    """
+    base_node = ToolNode(tool_list)
+
+    def execute_and_record(state: AgentState) -> dict:
+        """
+        Executes the pending tool call and records results into subagent_results.
+
+        Args:
+            state: The current AgentState. The last message must be an AIMessage
+                   with tool_calls populated.
+
+        Returns:
+            dict: State update with new ToolMessages in 'messages' and updated
+                  'subagent_results' for frontend access.
+        """
+        result = base_node.invoke(state)
+        new_subagent_results = dict(state.get("subagent_results") or {})
+
+        for msg in result.get("messages", []):
+            if isinstance(msg, ToolMessage):
+                new_subagent_results[msg.name] = msg.content
+
+        return {**result, "subagent_results": new_subagent_results}
+
+    return execute_and_record
+
+
+# ---------------------------------------------------------------------------
+# Node: synthesise
+# ---------------------------------------------------------------------------
+
+def synthesise(state: AgentState) -> dict:
+    """
+    Synthesises a final customer-facing reply from all accumulated tool results.
+
+    Invoked when the Orchestrator LLM decides no further tool calls are needed.
+    Passes the full conversation history (including all ToolMessages) plus the
+    synthesise system prompt to the LLM to produce a coherent, professional reply.
+
+    Args:
+        state: The current AgentState containing the full message history.
+
+    Returns:
+        dict: State update appending the final AIMessage reply to 'messages'.
+    """
     messages = state["messages"]
-    results = state.get("subagent_results", {})
-    prompt = f"{SYNTHESISE_SYSTEM_PROMPT}\n\nSubagent Results: {results}"
+    prompt = f"{SYNTHESISE_SYSTEM_PROMPT}\n\nSubagent Results: {state.get('subagent_results', {})}"
     response = llm.invoke([SystemMessage(content=prompt)] + messages)
     return {"messages": [response]}
 
-# Build the Graph
+
+# ---------------------------------------------------------------------------
+# Edge routing functions
+# ---------------------------------------------------------------------------
+
+def should_call_tools(state: AgentState) -> Literal["guardrail_check", "synthesise"]:
+    """
+    Conditional edge: checks whether the last LLM message contains tool calls.
+
+    Routes to 'guardrail_check' if the Orchestrator LLM wants to call a tool,
+    or to 'synthesise' if it produced a direct reply.
+
+    Args:
+        state: The current AgentState. Inspects the last message.
+
+    Returns:
+        "guardrail_check" if tool_calls are present, otherwise "synthesise".
+    """
+    last_message = state["messages"][-1]
+    if isinstance(last_message, AIMessage) and last_message.tool_calls:
+        return "guardrail_check"
+    return "synthesise"
+
+
+# ---------------------------------------------------------------------------
+# Build and compile the graph
+# ---------------------------------------------------------------------------
+
 builder = StateGraph(AgentState)
+
 builder.add_node("load_memory", load_memory)
-builder.add_node("classify_intent", classify_intent)
-builder.add_node("run_retrieval_agent", run_retrieval_agent)
-builder.add_node("run_action_agent", run_action_agent)
-builder.add_node("run_escalation_agent", run_escalation_agent)
+builder.add_node("orchestrator_agent", orchestrator_agent)
 builder.add_node("guardrail_check", guardrail_check)
+builder.add_node("execute_tools", build_execute_tools_node(tools))
 builder.add_node("synthesise", synthesise)
 
 builder.add_edge(START, "load_memory")
-builder.add_edge("load_memory", "classify_intent")
+builder.add_edge("load_memory", "orchestrator_agent")
 builder.add_conditional_edges(
-    "classify_intent",
-    route_to_subagent,
+    "orchestrator_agent",
+    should_call_tools,
     {
-        "run_retrieval_agent": "run_retrieval_agent",
         "guardrail_check": "guardrail_check",
-        "run_escalation_agent": "run_escalation_agent"
+        "synthesise": "synthesise",
     }
 )
-builder.add_edge("run_retrieval_agent", "synthesise")
-
-builder.add_conditional_edges(
-    "guardrail_check",
-    route_after_guardrail,
-    {
-        "run_escalation_agent": "run_escalation_agent",
-        "run_action_agent": "run_action_agent"
-    }
-)
-builder.add_edge("run_action_agent", "synthesise")
-builder.add_edge("run_escalation_agent", "synthesise")
+builder.add_edge("guardrail_check", "execute_tools")
+# Loop back: LLM evaluates the ToolMessage result and decides next action
+builder.add_edge("execute_tools", "orchestrator_agent")
 builder.add_edge("synthesise", END)
 
-# Compile using checkpointer and store
 root_agent = builder.compile(
     checkpointer=get_checkpointer(),
     store=get_store()
 )
 
+
 def run_root():
+    """
+    Returns the compiled root_agent graph for use by the FastAPI gateway.
+
+    Returns:
+        The compiled LangGraph CompiledStateGraph instance.
+    """
     return root_agent
