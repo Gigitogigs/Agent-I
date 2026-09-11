@@ -1,4 +1,14 @@
-# root_agent/router.py
+# DEPRECATED — This module is no longer used.
+#
+# router.py has been superseded by the dynamic tool-calling architecture in
+# root_agent/graph.py. The Orchestrator LLM now selects subagent tools
+# directly via llm.bind_tools(), replacing the rigid intent classification
+# pipeline that previously required this module.
+#
+# Retained for git history only. Do NOT import from this file.
+# -------------------------------------------------------------------
+
+
 #
 # Intent classification and routing logic for the Orchestrator Agent.
 #

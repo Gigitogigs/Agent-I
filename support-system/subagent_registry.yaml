@@ -3,7 +3,7 @@ orchestrator:
     model: qwen3.5:9b
     temperature: 1.0
     base_url: http://127.0.0.1:11434
-    tools: [retrieval_agent, escalation_agent]
+    tools: [retrieval_agent, escalation_agent, action_agent]
     
 subagents:
     retrieval_agent:
