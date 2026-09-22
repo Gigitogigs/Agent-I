@@ -25,6 +25,11 @@ from backend.services.member_service import (
     update_member_role,
     remove_member,
 )
+from backend.services.approval_service import (
+    list_approvals,
+    approve_request,
+    reject_request,
+)
 
 __all__ = [
     # Auth
@@ -50,4 +55,8 @@ __all__ = [
     "resend_invite",
     "update_member_role",
     "remove_member",
+    # Approvals
+    "list_approvals",
+    "approve_request",
+    "reject_request",
 ]

@@ -77,8 +77,9 @@ async def register_user(
     )
     db.add(user)
     await db.commit()
-    await db.refresh(user)
-    return user
+    # Fetch the user using our helper so that `workspaces` is eagerly loaded 
+    # (prevents MissingGreenlet lazy-load exception when serialising to UserOut).
+    return await get_user_by_id(db, str(user.id))
 
 
 # ---------------------------------------------------------------------------

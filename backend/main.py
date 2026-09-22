@@ -7,6 +7,7 @@ from backend.api.routers import auth
 from backend.api.routers import workspaces
 from backend.api.routers import account
 from backend.api.routers import members
+from backend.api.routers import approvals
 from backend.middleware import WorkspaceContextMiddleware
 
 app = FastAPI(
@@ -41,7 +42,7 @@ app.include_router(auth.router, prefix=settings.API_V1_STR, tags=["auth"])
 app.include_router(workspaces.router, prefix=settings.API_V1_STR, tags=["workspaces"])
 app.include_router(account.router, prefix=settings.API_V1_STR, tags=["account"])
 app.include_router(members.router, prefix=settings.API_V1_STR, tags=["members"])
-
+app.include_router(approvals.router, prefix=settings.API_V1_STR, tags=["approvals"])
 
 if __name__ == "__main__":
     import uvicorn

@@ -10,6 +10,7 @@ from backend.api.schemas.auth import (
 from backend.api.schemas.user import UserOut, UserUpdateRequest, MembershipOut
 from backend.api.schemas.workspace import WorkspaceOut, WorkspaceCreate, PasswordConfirmBody
 from backend.api.schemas.member import MemberOut, MemberInvite, MemberUpdate
+from backend.api.schemas.approval import ApprovalOut, ApprovalRejectBody
 
 __all__ = [
     # Auth
@@ -32,4 +33,7 @@ __all__ = [
     "MemberOut",
     "MemberInvite",
     "MemberUpdate",
+    # Approvals
+    "ApprovalOut",
+    "ApprovalRejectBody",
 ]

@@ -190,8 +190,9 @@ async def update_me(
         current_user.avatar_url = body.avatar_url
     current_user.updated_at = datetime.now(timezone.utc)
     await db.commit()
-    await db.refresh(current_user)
-    return _user_to_out(current_user)
+    from backend.services.auth_service import get_user_by_id
+    refreshed_user = await get_user_by_id(db, str(current_user.id))
+    return _user_to_out(refreshed_user)
 
 
 # ---------------------------------------------------------------------------
