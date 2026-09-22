@@ -38,6 +38,7 @@ from harness.model_factory import build_model, load_config
 from .state import AgentState
 from .tools.tool_registry import resolve_tools
 from .guardrails.check import validate_action
+from guardrails.handrolled.risk_policy import get_expiration
 from .prompts.prompts import ORCHESTRATOR_SYSTEM_PROMPT, SYNTHESISE_SYSTEM_PROMPT
 
 from langgraph.graph import StateGraph, START, END
@@ -162,6 +163,7 @@ def guardrail_check(state: AgentState) -> dict:
 
     if risk in ("HIGH", "CRITICAL"):
         # Build an escalation request from the guardrail intercept
+        expires_at = get_expiration(risk)
         escalation_args = {
             "request": EscalationRequest(
                 session_id=state.get("session_id", "unknown"),
@@ -169,6 +171,7 @@ def guardrail_check(state: AgentState) -> dict:
                 action_type="hitl_approval",
                 payload=tool_args,
                 risk_level=risk.lower(),
+                expires_at=expires_at,
             ).model_dump()
         }
 

@@ -48,7 +48,6 @@ from tenacity import retry, wait_exponential, stop_after_attempt
 import uuid
 import redis
 import json
-import psycopg2
 import os
 from datetime import datetime
 
@@ -88,25 +87,29 @@ def create_checkpoint(state: AgentState, config: RunnableConfig):
     """
     request = state['escalation_request']
     langgraph_checkpoint_id = config["configurable"]["checkpoint_id"]
-    #TODO: Connect to Postgres and INSERT INTO approvals table
-    #Use req.risk_level, req.risk_reason, req.sla_seconds, etc
+    
+    expires_at = request.expires_at
+
     conn = get_conn()
     cur = conn.cursor()
     try:
         cur.execute(
             """
-            INSERT INTO approvals.approval_requests (
-                session_id,
+            INSERT INTO approval_requests (
+                conversation_id,
+                workspace_id,
                 agent_id, -- TODO: pass agent_id logic in orchestrator agent 
                 action_type,
                 payload,
                 risk_level,
-                status
-            ) VALUES (%s, %s, %s, %s, %s, %s)
+                status,
+                expires_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
-                request.session_id,
+                request.conversation_id,
+                request.workspace_id,
                 request.agent_id,
                 request.action_type,
                 json.dumps({
@@ -114,7 +117,8 @@ def create_checkpoint(state: AgentState, config: RunnableConfig):
                     "checkpoint_id": langgraph_checkpoint_id,
                 }),
                 request.risk_level,
-                "pending"
+                "pending",
+                expires_at
             )
         )
         row = cur.fetchone()
@@ -131,7 +135,7 @@ def create_checkpoint(state: AgentState, config: RunnableConfig):
     
     results = EscalationResults(
         id = str(generated_id),
-        session_id = request.session_id,
+        conversation_id = request.conversation_id,
         reviewer_role = "",
         resolved_by = None,
         status = "pending"
@@ -152,12 +156,12 @@ def notify_operator(state: AgentState, config: RunnableConfig):
     Push notification  to Redis queue to alert human operator to approve/reject.
     """
     hitl_checkpoint_id = state["hitl_checkpoint_id"]
-    session_id = state["escalation_request"].session_id
+    conversation_id = state["escalation_request"].conversation_id
 
     notification = {
         "type": "hitl_notification",
         "checkpoint_id": hitl_checkpoint_id,
-        "session_id": session_id,
+        "conversation_id": conversation_id,
         "risk_level": state["escalation_request"].risk_level,
     }
 
@@ -204,14 +208,14 @@ def apply_decision(state: AgentState):
     try:
         cur.execute(
             """
-            UPDATE approvals.approval_requests
+            UPDATE approval_requests
             SET resolved_at = %s, status = %s
-            WHERE session_id = %s
+            WHERE conversation_id = %s
             """,
             (
                 resolved_at,
                 status,
-                state["escalation_request"].session_id
+                state["escalation_request"].conversation_id
             )
         )
         conn.commit()
@@ -273,7 +277,7 @@ def invoke_escalation_agent(request: EscalationRequest) -> EscalationResults:
     
     # We must pass a thread_id in the config so the checkpointer can save the interrupt state.
     # Using checkpoint_ns isolates this subagent's memory from the orchestrator's memory.
-    config = {"configurable": {"thread_id": request.session_id, "checkpoint_ns": "escalation_agent"}}
+    config = {"configurable": {"thread_id": request.conversation_id, "checkpoint_ns": "escalation_agent"}}
     
     result_state = escalation_agent.invoke(initial_state, config=config)
     
