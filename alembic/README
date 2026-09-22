@@ -1,0 +1,33 @@
+# Alembic Configuration README
+
+This directory contains the Alembic configuration for the support-system project. Alembic is a database migration tool for Python.
+
+## Structure
+
+- `alembic.ini`: The main configuration file for Alembic.
+- `env.py`: The environment-specific configuration.
+- `versions/`: Directory containing migration scripts.
+
+## Configuration
+
+The `sqlalchemy.url` in `alembic.ini` is configured to use the `settings.DATABASE_URL` from `backend.core.config`. The URL is escaped to handle special characters.
+
+## Running Migrations
+
+To create a new migration script:
+
+```bash
+$ alembic revision --autogenerate -m "migration description"
+```
+
+To apply all pending migrations:
+
+```bash
+$ alembic upgrade head
+```
+
+To downgrade by one version:
+
+```bash
+$ alembic downgrade -1
+```
