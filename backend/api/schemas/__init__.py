@@ -8,8 +8,11 @@ from backend.api.schemas.auth import (
     MessageResponse,
 )
 from backend.api.schemas.user import UserOut, UserUpdateRequest, MembershipOut
+from backend.api.schemas.workspace import WorkspaceOut, WorkspaceCreate, PasswordConfirmBody
+from backend.api.schemas.member import MemberOut, MemberInvite, MemberUpdate
 
 __all__ = [
+    # Auth
     "RegisterRequest",
     "LoginRequest",
     "RefreshRequest",
@@ -17,7 +20,16 @@ __all__ = [
     "PasswordResetConfirmBody",
     "TokenResponse",
     "MessageResponse",
+    # User
     "UserOut",
     "UserUpdateRequest",
     "MembershipOut",
+    # Workspace
+    "WorkspaceOut",
+    "WorkspaceCreate",
+    "PasswordConfirmBody",
+    # Member
+    "MemberOut",
+    "MemberInvite",
+    "MemberUpdate",
 ]

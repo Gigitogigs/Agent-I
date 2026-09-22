@@ -4,6 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.core.config import settings
 from backend.api.routers import health
 from backend.api.routers import auth
+from backend.api.routers import workspaces
+from backend.api.routers import account
+from backend.api.routers import members
 from backend.middleware import WorkspaceContextMiddleware
 
 app = FastAPI(
@@ -35,6 +38,9 @@ app.add_middleware(WorkspaceContextMiddleware)
 
 app.include_router(health.router, prefix=settings.API_V1_STR, tags=["health"])
 app.include_router(auth.router, prefix=settings.API_V1_STR, tags=["auth"])
+app.include_router(workspaces.router, prefix=settings.API_V1_STR, tags=["workspaces"])
+app.include_router(account.router, prefix=settings.API_V1_STR, tags=["account"])
+app.include_router(members.router, prefix=settings.API_V1_STR, tags=["members"])
 
 
 if __name__ == "__main__":

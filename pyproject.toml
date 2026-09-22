@@ -107,8 +107,12 @@ dependencies = [
     "python-dotenv>=1.2.3",
     "langchain-text-splitters>=1.1.2",
     "mcp>=2.1.1",
-    "fastapi>=0.141.1",
+    "fastapi[standard]>=0.141.1",
     "uvicorn[standard]>=0.52.4",
+    "python-jose[cryptography]>=3.3.0",
+    "passlib>=1.7.4",
+    "bcrypt>=4.2.1",
+    "pydantic[email]>=2.13.4",
     "psycopg2-binary>=2.9.13",
 ]
 
