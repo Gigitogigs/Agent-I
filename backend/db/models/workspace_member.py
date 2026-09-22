@@ -16,7 +16,9 @@ class WorkspaceMember(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     workspace = relationship("Workspace", back_populates="members")
+    # Explicit foreign_keys required — two FKs on this table both point to users
     user = relationship("User", foreign_keys=[user_id], back_populates="workspaces")
+    invited_by = relationship("User", foreign_keys=[invited_by_user_id])
 
     __table_args__ = (
         UniqueConstraint("workspace_id", "user_id", name="uix_workspace_user"),

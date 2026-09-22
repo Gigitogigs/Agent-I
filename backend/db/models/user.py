@@ -19,7 +19,12 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
-    workspaces = relationship("WorkspaceMember", back_populates="user", cascade="all, delete-orphan")
+    workspaces = relationship(
+        "WorkspaceMember",
+        foreign_keys="WorkspaceMember.user_id",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
     sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
 
 
