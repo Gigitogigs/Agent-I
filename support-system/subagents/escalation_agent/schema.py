@@ -59,7 +59,8 @@ def _make_json_safe(obj: Any) -> Any:
 
 
 class EscalationRequest(BaseModel):
-    session_id: str
+    conversation_id: str
+    workspace_id: str
     agent_id: str
     action_type: str
     payload: dict
@@ -89,7 +90,7 @@ class EscalationRequest(BaseModel):
 
 class EscalationResults(BaseModel):
     id: str
-    session_id: str
+    conversation_id: str
     reviewer_role: Optional[str] = None
     resolved_by: Optional[str] = None
     status: str

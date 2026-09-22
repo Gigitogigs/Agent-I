@@ -12,43 +12,29 @@
 #   The pool is initialised once in FastAPI's lifespan event and torn down on
 #   shutdown, so every request borrows a connection and returns it afterwards.
 
-import psycopg2
-from psycopg2 import pool as pg_pool
-import os
-from dotenv import load_dotenv
+# approvals/app/db.py
+#
+# Connection wrapper for the HITL Approval FastAPI application.
+# Now centralized to use the backend's shared legacy sync pool.
 
-load_dotenv()
-
-DB_URL = os.getenv("DB_URL")
-if not DB_URL:
-    raise RuntimeError("DB_URL environment variable is not set.")
-
-# Module-level pool — created in lifespan, reused by all requests
-_pool: pg_pool.ThreadedConnectionPool | None = None
-
+import psycopg
+from backend.db.session import get_legacy_sync_pool
 
 def init_pool(minconn: int = 2, maxconn: int = 10) -> None:
-    """Initialise the pool. Called once from FastAPI lifespan on startup."""
-    global _pool
-    _pool = pg_pool.ThreadedConnectionPool(minconn=minconn, maxconn=maxconn, dsn=DB_URL)
-
+    """No-op. Pool is managed by backend/db/session.py lazily."""
+    pass
 
 def close_pool() -> None:
     """Close all connections. Called once from FastAPI lifespan on shutdown."""
-    global _pool
-    if _pool is not None:
-        _pool.closeall()
-        _pool = None
+    pool = get_legacy_sync_pool()
+    pool.close()
 
-
-def get_conn() -> psycopg2.extensions.connection:
+def get_conn() -> psycopg.Connection:
     """Borrow a connection from the pool. Caller MUST call release_conn() after use."""
-    if _pool is None:
-        raise RuntimeError("DB pool not initialised — did FastAPI lifespan run?")
-    return _pool.getconn()
+    pool = get_legacy_sync_pool()
+    return pool.getconn()
 
-
-def release_conn(conn: psycopg2.extensions.connection) -> None:
+def release_conn(conn: psycopg.Connection) -> None:
     """Return a borrowed connection to the pool."""
-    if _pool is not None:
-        _pool.putconn(conn)
+    pool = get_legacy_sync_pool()
+    pool.putconn(conn)

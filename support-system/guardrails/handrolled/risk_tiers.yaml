@@ -1,7 +1,18 @@
-get_order_status: low
-get_order_history: low
-get_account_details: low
-get_billing_details: low
-update_shipping_address: medium
-cancel_order: high
-issue_refund: high
+tools:
+  get_order_status: low
+  get_order_history: low
+  get_account_details: low
+  get_billing_details: low
+  update_shipping_address: medium
+  cancel_order: high
+  issue_refund: high
+
+tiers:
+  low:
+    sla_hours: 48
+  medium:
+    sla_hours: 24
+  high:
+    sla_hours: 4
+  critical:
+    sla_hours: 1

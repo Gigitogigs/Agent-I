@@ -32,24 +32,14 @@ import psycopg_pool
 from psycopg.rows import dict_row
 from langgraph.store.postgres import PostgresStore
 import os
+from backend.db.session import get_store_pool
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
 DB_URL = os.getenv("DB_URL") or ""
-_pool = None
 
 def get_store():
-    global _pool
-    if _pool is None:
-        _pool = psycopg_pool.ConnectionPool(
-            conninfo=DB_URL,
-            max_size=20,
-            kwargs={
-                "autocommit": True, 
-                "prepare_threshold": 0,
-                "row_factory": dict_row,
-            },
-        )
-    store = PostgresStore(_pool)  # type: ignore[arg-type]
+    pool = get_store_pool()
+    store = PostgresStore(pool)  # type: ignore[arg-type]
     store.setup()
     return store

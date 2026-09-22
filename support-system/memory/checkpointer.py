@@ -21,42 +21,31 @@ Usage context:
 """
 
 import psycopg
-import psycopg_pool
 from langgraph.checkpoint.postgres import PostgresSaver
 import os
 from dotenv import load_dotenv
 
+from backend.db.session import get_checkpointer_pool
+
 load_dotenv(override=True)
-DB_URL = os.getenv("DB_URL")
+DB_URL = os.getenv("DB_URL") or ""
+POSTGRES_CHECKPOINTER_SCHEMA = os.getenv("POSTGRES_CHECKPOINTER_SCHEMA", "checkpoints")
+_pool = None
+
+
+def setup_checkpointer() -> None:
+    """
+    Ensure the checkpointer tables exist.
+    Called once by the application (or Orchestrator startup) to verify schema.
+    """
+    pass # No setup needed as the pool handles schema
 
 
 def get_checkpointer() -> PostgresSaver:
     """
-    Create and return a LangGraph PostgresSaver checkpointer.
-
-    Opens a psycopg2 connection to the Postgres database specified by the
-    DB_URL environment variable, initialises the checkpointer schema (creates
-    the required tables if they don't already exist), and returns the ready-
-    to-use checkpointer instance.
-
-    Returns:
-        PostgresSaver: A LangGraph checkpointer that persists graph state to
-        Postgres. Pass this directly to your compiled LangGraph graph:
-
-            graph = builder.compile(checkpointer=get_checkpointer())
-
-    Raises:
-        psycopg.OperationalError: If the DB_URL is missing or the database
-        is unreachable.
+    Returns an instance of PostgresSaver initialized with the unified backend connection pool.
     """
-    pool = psycopg_pool.ConnectionPool(
-        conninfo=DB_URL,
-        max_size=20,
-        kwargs={
-            "autocommit": True, 
-            "prepare_threshold": 0,
-        },
-    )
+    pool = get_checkpointer_pool()
     checkpointer = PostgresSaver(pool)
     checkpointer.setup()
-    return checkpointer
+    return checkpointer

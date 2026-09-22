@@ -56,6 +56,7 @@ vector_store = PGVector(
     collection_name=_COLLECTION_NAME,
     connection=_CONNECTION_STRING,  # PGVector uses `connection=`, not `connection_string=`
     use_jsonb=True,
+    engine_args={"connect_args": {"options": "-c search_path=rag"}},
 )
 
 # ---------------------------------------------------------------------------
