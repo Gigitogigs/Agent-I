@@ -3,6 +3,8 @@ import os
 import pytest
 import psycopg
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from unittest.mock import AsyncMock
+
 from backend.core.config import settings
 from backend.db.base import Base
 # Import all models to ensure they are registered with Base.metadata
@@ -125,3 +127,31 @@ async def db_session():
         await session.rollback() 
         
     await engine.dispose()
+
+@pytest.fixture(autouse=True)
+def mock_arq_redis(monkeypatch):
+    mock_pool = AsyncMock()
+    # It might not be imported if running other tests, so we use try/except
+    try:
+        monkeypatch.setattr("backend.api.routers.knowledge.get_arq_redis", AsyncMock(return_value=mock_pool))
+    except (ImportError, AttributeError):
+        pass
+
+@pytest.fixture
+async def async_client(db_session):
+    from backend.main import app
+    from backend.api.dependencies import get_db
+    from httpx import AsyncClient, ASGITransport
+    
+    # Override get_db to return the current test transaction
+    async def override_get_db():
+        yield db_session
+        
+    app.dependency_overrides[get_db] = override_get_db
+    
+    # Use httpx AsyncClient for integration testing
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test/api/v1") as client:
+        yield client
+        
+    app.dependency_overrides.clear()
