@@ -14,7 +14,7 @@ router = APIRouter(prefix="/workspaces/{workspace_id}/agents", tags=["agents"])
 async def get_agents(
     workspace_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _membership = Depends(require_min_role("read_only"))
+    _membership = Depends(require_min_role("read-only"))
 ):
     return await get_agent_config(db, workspace_id)
 

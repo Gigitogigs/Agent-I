@@ -18,7 +18,7 @@ router = APIRouter(prefix="/workspaces", tags=["chat"])
     # but since it's the backend API, we might require some auth.
     # For now, we'll assume it's read-only+ or public depending on how the widget connects.
     # To match API-Contract read-only+ for stats, we'll just require read_only to test.
-    dependencies=[Depends(require_min_role("read_only"))]
+    dependencies=[Depends(require_min_role("read-only"))]
 )
 async def submit_chat_message(
     workspace_id: UUID,
@@ -67,7 +67,7 @@ async def submit_chat_message(
 @router.get(
     "/{workspace_id}/conversations",
     response_model=ConversationListResponse,
-    dependencies=[Depends(require_min_role("read_only"))]
+    dependencies=[Depends(require_min_role("read-only"))]
 )
 async def get_conversations(
     workspace_id: UUID,
@@ -103,7 +103,7 @@ async def get_conversations(
 @router.get(
     "/{workspace_id}/conversations/{conversation_id}",
     response_model=ConversationDetailOut,
-    dependencies=[Depends(require_min_role("read_only"))]
+    dependencies=[Depends(require_min_role("read-only"))]
 )
 async def get_conversation(
     workspace_id: UUID,

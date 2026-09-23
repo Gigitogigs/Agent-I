@@ -114,6 +114,13 @@ dependencies = [
     "bcrypt>=4.2.1",
     "pydantic[email]>=2.13.4",
     "psycopg2-binary>=2.9.13",
+    "pypdf>=6.19.0",
+    "docx2txt>=0.9",
+    "pandas>=3.0.6",
+    "openpyxl>=3.1.5",
+    "arq>=0.25.0",
+    "python-multipart>=0.0.32",
+    "langchain-community>=0.4.2",
 ]
 
 [tool.hatch.build.targets.wheel]

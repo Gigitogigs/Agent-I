@@ -10,6 +10,7 @@ from backend.api.routers import members
 from backend.api.routers import approvals
 from backend.api.routers import chat
 from backend.api.routers import agents
+from backend.api.routers import knowledge
 from backend.middleware import WorkspaceContextMiddleware
 
 app = FastAPI(
@@ -47,6 +48,7 @@ app.include_router(members.router, prefix=settings.API_V1_STR, tags=["members"])
 app.include_router(approvals.router, prefix=settings.API_V1_STR, tags=["approvals"])
 app.include_router(chat.router, prefix=settings.API_V1_STR, tags=["chat"])
 app.include_router(agents.router, prefix=settings.API_V1_STR, tags=["agents"])
+app.include_router(knowledge.router, prefix=settings.API_V1_STR, tags=["knowledge"])
 
 if __name__ == "__main__":
     import uvicorn

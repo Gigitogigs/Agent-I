@@ -109,8 +109,8 @@ async def get_current_membership(
             return membership
 
     raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="You do not have access to this workspace.",
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Workspace not found.",
     )
 
 

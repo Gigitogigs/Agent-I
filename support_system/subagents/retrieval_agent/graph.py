@@ -148,7 +148,7 @@ def rewrite_query_node(state: AgentState, config: RunnableConfig):
     })
     return {"rewritten_query": result}
 
-def vector_search_node(state: AgentState):
+def vector_search_node(state: AgentState, config: RunnableConfig):
     """
     Executes a similarity search against the vector database using the rewritten query representations.
     
@@ -157,6 +157,7 @@ def vector_search_node(state: AgentState):
     
     Args:
         state (AgentState): The current state containing the 'rewritten_query'.
+        config (RunnableConfig): Config containing workspace context.
         
     Returns:
         dict: A state update containing the 'retrieved_docs' (list of relevant documents).
@@ -165,10 +166,18 @@ def vector_search_node(state: AgentState):
 
     search_string = f"{queries.declarative_query}\n\n{queries.hypothetical_answer}"
 
+    # Ensure workspace isolation
+    filters = state.get("filters") or {}
+    # If the orchestrator provided agent_config, it should have the workspace_id.
+    agent_config = config.get("configurable", {}).get("agent_config", {})
+    workspace_id = agent_config.get("workspace_id")
+    if workspace_id:
+        filters["workspace_id"] = str(workspace_id)
+
     doc_search_results = pgvector_client.similarity_search(
         query=search_string,
         top_k=state.get("top_k", 5),
-        filter=state.get("filters")
+        filter=filters
     )
     
     return {"retrieved_docs": doc_search_results}

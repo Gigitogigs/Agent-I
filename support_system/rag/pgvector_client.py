@@ -36,25 +36,26 @@ from langchain_ollama import OllamaEmbeddings
 from langchain_postgres import PGVector
 from langchain_core.documents import Document
 
+from backend.core.config import settings
+
 # ---------------------------------------------------------------------------
 # Shared setup — created once at import time and reused across all calls.
 # ---------------------------------------------------------------------------
 
 _EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "qwen3-embedding:0.6b")
 _COLLECTION_NAME = os.getenv("RAG_COLLECTION", "documents")
-_CONNECTION_STRING = os.getenv("DB_URL")  # e.g. postgresql+psycopg://user:pass@host/db
-if _CONNECTION_STRING and _CONNECTION_STRING.startswith("postgres:"):
-    if not _CONNECTION_STRING.startswith("postgres://"):
-        _CONNECTION_STRING = _CONNECTION_STRING.replace("postgres:", "postgresql+psycopg://", 1)
-    else:
-        _CONNECTION_STRING = _CONNECTION_STRING.replace("postgres://", "postgresql+psycopg://", 1)
+
+# langchain_postgres PGVector prefers psycopg
+_CONNECTION_STRING = settings.DATABASE_URL
+if "asyncpg" in _CONNECTION_STRING:
+    _CONNECTION_STRING = _CONNECTION_STRING.replace("asyncpg", "psycopg")
 
 embeddings = OllamaEmbeddings(model=_EMBEDDING_MODEL, base_url="http://127.0.0.1:11434")
 
 vector_store = PGVector(
     embeddings=embeddings,
     collection_name=_COLLECTION_NAME,
-    connection=_CONNECTION_STRING,  # PGVector uses `connection=`, not `connection_string=`
+    connection=_CONNECTION_STRING,
     use_jsonb=True,
     engine_args={"connect_args": {"options": "-c search_path=rag"}},
 )
@@ -98,14 +99,13 @@ def similarity_search(
     return results
 
 
-def delete_document(doc_id: str) -> None:
+def delete_document(document_id: str) -> None:
     """
     Delete all stored chunks that belong to the given document.
 
     Use this before re-ingesting an updated document to avoid duplicates.
 
     Args:
-        doc_id : The source identifier (URL or file path) stored in chunk metadata
-                 under the key "doc_id".
+        document_id : The source identifier stored in chunk metadata
     """
-    vector_store.delete(filter={"doc_id": doc_id})
+    vector_store.delete(filter={"document_id": document_id})

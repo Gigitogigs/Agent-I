@@ -55,9 +55,9 @@ async def get_agent_config(db: AsyncSession, workspace_id: UUID) -> AgentConfigO
     )
 
 async def update_agent_config(db: AsyncSession, workspace_id: UUID, agent_type: str, update_data: AgentConfigUpdate) -> AgentConfigOut:
+    # Use get_agent_config to guarantee it exists/is seeded
+    await get_agent_config(db, workspace_id)
     config = await db.scalar(select(WorkspaceAgentConfig).where(WorkspaceAgentConfig.workspace_id == workspace_id))
-    if not config:
-        raise HTTPException(status_code=404, detail="Agent config not found")
         
     def _update_jsonb(col_name: str, key: str, val: Any):
         col = getattr(config, col_name) or {}
