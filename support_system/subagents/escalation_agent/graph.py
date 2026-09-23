@@ -52,15 +52,12 @@ import os
 from datetime import datetime
 
 from .schema import EscalationRequest, EscalationResults
-from harness.model_factory import build_model, load_config
-from memory.checkpointer import get_checkpointer
+from support_system.harness.model_factory import build_model, load_config
+from support_system.memory.checkpointer import get_checkpointer
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-llm_config = load_config()
-escalation_config = llm_config.get("subagents", {}).get("escalation_agent", {})
-llm = build_model(escalation_config)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 redis_client = redis.Redis.from_url(REDIS_URL)
@@ -70,7 +67,7 @@ import os
 
 # Ensure imports resolve to our project roots
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-from approvals.app.db import get_conn, release_conn
+from backend.db.session import get_legacy_sync_pool
 
 
 
@@ -90,7 +87,8 @@ def create_checkpoint(state: AgentState, config: RunnableConfig):
     
     expires_at = request.expires_at
 
-    conn = get_conn()
+    pool = get_legacy_sync_pool()
+    conn = pool.getconn()
     cur = conn.cursor()
     try:
         cur.execute(
@@ -131,7 +129,7 @@ def create_checkpoint(state: AgentState, config: RunnableConfig):
         raise e
     finally:
         cur.close()
-        release_conn(conn)
+        pool.putconn(conn)
     
     results = EscalationResults(
         id = str(generated_id),
@@ -246,7 +244,7 @@ builder.add_edge("apply_decision", END)
 escalation_agent = builder.compile(checkpointer=get_checkpointer())
 
 @tool(name_or_callable="escalation_agent")
-def invoke_escalation_agent(request: EscalationRequest) -> EscalationResults:
+def invoke_escalation_agent(request: EscalationRequest, config: RunnableConfig) -> EscalationResults:
     """
     Escalates a conversation to a human operator, or pauses for human approval before executing a high-risk action.
 
@@ -277,8 +275,11 @@ def invoke_escalation_agent(request: EscalationRequest) -> EscalationResults:
     
     # We must pass a thread_id in the config so the checkpointer can save the interrupt state.
     # Using checkpoint_ns isolates this subagent's memory from the orchestrator's memory.
-    config = {"configurable": {"thread_id": request.conversation_id, "checkpoint_ns": "escalation_agent"}}
+    child_config = dict(config) if config else {"configurable": {}}
+    child_config["configurable"] = dict(child_config.get("configurable", {}))
+    child_config["configurable"]["thread_id"] = request.conversation_id
+    child_config["configurable"]["checkpoint_ns"] = "escalation_agent"
     
-    result_state = escalation_agent.invoke(initial_state, config=config)
+    result_state = escalation_agent.invoke(initial_state, config=child_config)
     
     return result_state["escalation_results"]

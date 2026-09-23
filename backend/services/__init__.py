@@ -30,6 +30,7 @@ from backend.services.approval_service import (
     approve_request,
     reject_request,
 )
+from backend.services.chat_service import process_chat_turn
 
 __all__ = [
     # Auth
@@ -59,4 +60,6 @@ __all__ = [
     "list_approvals",
     "approve_request",
     "reject_request",
+    # Chat
+    "process_chat_turn",
 ]

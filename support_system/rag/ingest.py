@@ -17,7 +17,7 @@ from pathlib import Path
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from rag.pgvector_client import upsert_chunks, delete_document
+from support_system.rag.pgvector_client import upsert_chunks, delete_document
 
 # ---------------------------------------------------------------------------
 # Config

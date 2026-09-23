@@ -34,7 +34,7 @@
 #     - document_id     : str
 #     - similarity      : float  — cosine similarity score from pgvector
 
-from rag import pgvector_client, ingest
+from support_system.rag import pgvector_client, ingest
 from pydantic import BaseModel
 
 

@@ -1,6 +1,6 @@
-from subagents.escalation_agent.graph import invoke_escalation_agent
-from subagents.retrieval_agent.graph import invoke_retrieval_agent
-from subagents.action_agent.graph import invoke_action_agent
+from support_system.subagents.escalation_agent.graph import invoke_escalation_agent
+from support_system.subagents.retrieval_agent.graph import invoke_retrieval_agent
+from support_system.subagents.action_agent.graph import invoke_action_agent
 
 TOOL_REGISTRY = {
     "retrieval_agent": invoke_retrieval_agent,

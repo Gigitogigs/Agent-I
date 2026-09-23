@@ -34,35 +34,28 @@
 
 from typing import Literal, Optional
 
-from harness.model_factory import build_model, load_config
+from support_system.harness.model_factory import build_model, load_config
 from .state import AgentState
 from .tools.tool_registry import resolve_tools
 from .guardrails.check import validate_action
-from guardrails.handrolled.risk_policy import get_expiration
+from support_system.guardrails.handrolled.risk_policy import get_expiration
 from .prompts.prompts import ORCHESTRATOR_SYSTEM_PROMPT, SYNTHESISE_SYSTEM_PROMPT
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.postgres import PostgresSaver
-from memory.checkpointer import get_checkpointer
-from memory.store import get_store
+from support_system.memory.checkpointer import get_checkpointer
+from support_system.memory.store import get_store
 from langgraph.store.base import BaseStore
 from langchain_core.runnables.config import RunnableConfig
 
 from langchain_core.messages import BaseMessage, SystemMessage, AIMessage, ToolMessage
-from subagents.escalation_agent.schema import EscalationRequest
-from subagents.action_agent.graph import invoke_action_agent
-from subagents.retrieval_agent.graph import invoke_retrieval_agent
-from subagents.escalation_agent.graph import invoke_escalation_agent
+from support_system.subagents.escalation_agent.schema import EscalationRequest
+from support_system.subagents.action_agent.graph import invoke_action_agent
+from support_system.subagents.retrieval_agent.graph import invoke_retrieval_agent
+from support_system.subagents.escalation_agent.graph import invoke_escalation_agent
 
-# ---------------------------------------------------------------------------
-# Startup: build the LLM and bind tools from config
-# ---------------------------------------------------------------------------
-
-root_config = load_config()["orchestrator"]
-llm = build_model(root_config)
-tools = resolve_tools(root_config["tools"])
-llm_with_tools = llm.bind_tools(tools)
+from .tools.tool_registry import resolve_tools, ALL_TOOLS
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +88,7 @@ def load_memory(state: AgentState, config: RunnableConfig, store: BaseStore) -> 
 # Node: orchestrator_agent
 # ---------------------------------------------------------------------------
 
-def orchestrator_agent(state: AgentState) -> dict:
+def orchestrator_agent(state: AgentState, config: RunnableConfig) -> dict:
     """
     The core reasoning node of the Orchestrator.
 
@@ -107,11 +100,18 @@ def orchestrator_agent(state: AgentState) -> dict:
 
     Args:
         state: The current AgentState containing messages and customer_context.
+        config: RunnableConfig containing dynamic agent_config.
 
     Returns:
         dict: State update containing the new AIMessage appended to 'messages'.
     """
-    system_prompt = ORCHESTRATOR_SYSTEM_PROMPT.format(
+    agent_config = config.get("configurable", {}).get("agent_config", {}).get("orchestrator", {})
+    llm = build_model(agent_config)
+    tools = resolve_tools(agent_config.get("tools", []))
+    llm_with_tools = llm.bind_tools(tools) if tools else llm
+
+    system_prompt_template = agent_config.get("system_prompt") or ORCHESTRATOR_SYSTEM_PROMPT
+    system_prompt = system_prompt_template.format(
         customer_context=state.get("customer_context", {})
     )
     messages = [SystemMessage(content=system_prompt)] + state["messages"]
@@ -243,7 +243,7 @@ def build_execute_tools_node(tool_list: list):
 # Node: synthesise
 # ---------------------------------------------------------------------------
 
-def synthesise(state: AgentState) -> dict:
+def synthesise(state: AgentState, config: RunnableConfig) -> dict:
     """
     Synthesises a final customer-facing reply from all accumulated tool results.
 
@@ -253,10 +253,14 @@ def synthesise(state: AgentState) -> dict:
 
     Args:
         state: The current AgentState containing the full message history.
+        config: RunnableConfig containing dynamic agent_config.
 
     Returns:
         dict: State update appending the final AIMessage reply to 'messages'.
     """
+    agent_config = config.get("configurable", {}).get("agent_config", {}).get("orchestrator", {})
+    llm = build_model(agent_config)
+
     messages = state["messages"]
     prompt = f"{SYNTHESISE_SYSTEM_PROMPT}\n\nSubagent Results: {state.get('subagent_results', {})}"
     response = llm.invoke([SystemMessage(content=prompt)] + messages)
@@ -295,7 +299,7 @@ builder = StateGraph(AgentState)
 builder.add_node("load_memory", load_memory)
 builder.add_node("orchestrator_agent", orchestrator_agent)
 builder.add_node("guardrail_check", guardrail_check)
-builder.add_node("execute_tools", build_execute_tools_node(tools))
+builder.add_node("execute_tools", build_execute_tools_node(ALL_TOOLS))
 builder.add_node("synthesise", synthesise)
 
 builder.add_edge(START, "load_memory")

@@ -11,6 +11,7 @@ from backend.api.schemas.user import UserOut, UserUpdateRequest, MembershipOut
 from backend.api.schemas.workspace import WorkspaceOut, WorkspaceCreate, PasswordConfirmBody
 from backend.api.schemas.member import MemberOut, MemberInvite, MemberUpdate
 from backend.api.schemas.approval import ApprovalOut, ApprovalRejectBody
+from backend.api.schemas.chat import ChatRequest, ChatResponse
 
 __all__ = [
     # Auth
@@ -36,4 +37,7 @@ __all__ = [
     # Approvals
     "ApprovalOut",
     "ApprovalRejectBody",
+    # Chat
+    "ChatRequest",
+    "ChatResponse",
 ]

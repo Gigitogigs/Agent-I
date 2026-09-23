@@ -117,14 +117,14 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["support-system"]
+packages = ["support_system"]
 
 [tool.pyright]
 pythonPath = ".venv/Scripts/python.exe"
-extraPaths = ["support-system"]
+extraPaths = ["support_system"]
 
 [tool.pytest.ini_options]
-pythonpath = ["support-system"]
+pythonpath = ["support_system"]
 
 [build-system]
 requires = ["hatchling"]

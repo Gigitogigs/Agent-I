@@ -93,16 +93,22 @@ def build_model(agent_config: dict):
 
     model_class = PROVIDERS[provider]
 
-    known_keys = {"provider", "model", "temperature", "tools"}
+    known_keys = {"provider", "model", "temperature", "tools", "api_key"}
     extra_kwargs = {k:v for k,v in agent_config.items() if k not in known_keys}
     
     model_name = agent_config.get("model")
     if model_name is None:
         raise ValueError("The 'model' key is required in the agent configuration.")
-
-    return model_class(
-        model=model_name,
-        temperature=agent_config.get("temperature",0.7),
+        
+    kwargs = {
+        "model": model_name,
+        "temperature": agent_config.get("temperature", 0.7),
         **extra_kwargs
-    )
+    }
+    
+    api_key = agent_config.get("api_key")
+    if api_key:
+        kwargs["api_key"] = api_key
+
+    return model_class(**kwargs)
 

@@ -46,8 +46,8 @@ from .schema import ActionRequest, ActionResult
 
 # Ensure imports resolve to our project roots
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-from mcp_client.client import MCPToolClient
-from approvals.app.db import get_conn, release_conn
+from support_system.mcp_client.client import MCPToolClient
+from support_system.approvals.app.db import get_conn, release_conn
 
 
 class AgentState(TypedDict):
@@ -63,7 +63,9 @@ def validate_params(state: AgentState) -> dict:
     return state
 
 
-def execute_tool(state: AgentState) -> dict:
+from langchain_core.runnables.config import RunnableConfig
+
+def execute_tool(state: AgentState, config: RunnableConfig) -> dict:
     """Execute the domain-specific tool via the MCP Tool Layer, ensuring idempotency."""
     req = state["request"]
     
@@ -105,12 +107,8 @@ def execute_tool(state: AgentState) -> dict:
         release_conn(conn)
         raise e
 
-    # Look up the target MCP server from the registry config
-    registry_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'subagent_registry.yaml'))
-    with open(registry_path, "r") as f:
-        registry = yaml.safe_load(f)
-    
-    server_dir = registry["subagents"]["action_agent"].get("mcp_server", "order_account_mcp")
+    agent_config = config.get("configurable", {}).get("agent_config", {}).get("subagents", {}).get("action_agent", {})
+    server_dir = agent_config.get("mcp_server", "order_account_mcp")
     server_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'mcp_servers', server_dir, 'server.py'))
     
     # Inject idempotency_key for mutating operations
@@ -198,6 +196,7 @@ def invoke_action_agent(
     params: dict,
     session_id: str,
     turn_id: str,
+    config: RunnableConfig,
     risk_level: str = "low"
 ) -> ActionResult:
     """
@@ -234,7 +233,7 @@ def invoke_action_agent(
     )
     
     # Run the graph and retrieve the final state
-    result_state = action_agent_graph.invoke({"request": request})
+    result_state = action_agent_graph.invoke({"request": request}, config=config)
     
     # Return the ActionResult object to the caller (Orchestrator)
     return result_state["result"]

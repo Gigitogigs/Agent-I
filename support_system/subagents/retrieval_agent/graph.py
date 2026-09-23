@@ -45,9 +45,9 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.documents import Document
 from langchain_core.tools import tool
 
-from harness.model_factory import build_model, load_config
+from support_system.harness.model_factory import build_model, load_config
 
-from rag import pgvector_client
+from support_system.rag import pgvector_client
 from .schema import RetrievalRequest, RetrievalResult, ChunkRef
 
 class searchQueries(BaseModel):
@@ -69,13 +69,6 @@ class AgentState(TypedDict):
     retrieved_docs: List[Document]
     final_response: RetrievalResult
     rewritten_query: searchQueries
-
-##LLM model 
-llm_config = load_config()
-retrieval_config = llm_config.get("subagents", {}).get("retrieval_agent", {})
-
-llm = build_model(retrieval_config)
-structured_rewriter = llm.with_structured_output(searchQueries)
 
 
 rewrite_prompt = ChatPromptTemplate.from_messages([
@@ -127,10 +120,10 @@ rewrite_prompt = ChatPromptTemplate.from_messages([
      "Recent chat history (use for pronoun resolution and context only):\n{chat_history}")
 ])
 
-query_rewrite_chain = rewrite_prompt | structured_rewriter
 
+from langchain_core.runnables.config import RunnableConfig
 
-def rewrite_query_node(state: AgentState):
+def rewrite_query_node(state: AgentState, config: RunnableConfig):
     """
     Transforms the user's raw query into structured search representations optimized for vector retrieval.
     
@@ -139,10 +132,16 @@ def rewrite_query_node(state: AgentState):
     
     Args:
         state (AgentState): The current state of the agent, containing the original query and chat history.
+        config (RunnableConfig): Configuration containing the dynamic agent config.
         
     Returns:
         dict: A state update containing the 'rewritten_query' as a searchQueries object.
     """
+    agent_config = config.get("configurable", {}).get("agent_config", {}).get("subagents", {}).get("retrieval_agent", {})
+    llm = build_model(agent_config)
+    structured_rewriter = llm.with_structured_output(searchQueries)
+    query_rewrite_chain = rewrite_prompt | structured_rewriter
+
     result = query_rewrite_chain.invoke({
         "original_query": state["query"],
         "chat_history": state.get("messages", [])
@@ -175,7 +174,7 @@ def vector_search_node(state: AgentState):
     return {"retrieved_docs": doc_search_results}
 
 
-def generate_answer_node(state: AgentState):
+def generate_answer_node(state: AgentState, config: RunnableConfig):
     """
     Synthesizes a final answer to the user's query based strictly on the retrieved document chunks.
     
@@ -255,6 +254,8 @@ def generate_answer_node(state: AgentState):
     """
 
     # Invoke LLM to synthesise a grounded answer from the retrieved documents
+    agent_config = config.get("configurable", {}).get("agent_config", {}).get("subagents", {}).get("retrieval_agent", {})
+    llm = build_model(agent_config)
     llm_response = llm.invoke(answer_prompt)
     answer_text = llm_response.content if hasattr(llm_response, "content") else str(llm_response)
 
@@ -287,6 +288,7 @@ retrieval_agent = builder.compile()
 def invoke_retrieval_agent(
     query: str,
     context_slice: list[str],
+    config: RunnableConfig,
     top_k: int = 5,
     filters: dict | None = None
 ) -> RetrievalResult:
@@ -312,6 +314,6 @@ def invoke_retrieval_agent(
         "filters": filters
     }
     
-    result_state = retrieval_agent.invoke(initial_state)
+    result_state = retrieval_agent.invoke(initial_state, config=config)
     
     return result_state["final_response"]    
