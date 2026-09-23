@@ -34,4 +34,7 @@ class WorkspaceAgentConfig(Base):
     custom_models = Column(JSONB, nullable=True)
     custom_temperatures = Column(JSONB, nullable=True)
     custom_prompts = Column(JSONB, nullable=True)
+    custom_tools = Column(JSONB, nullable=True)
+    custom_guardrails = Column(JSONB, nullable=True)
+    custom_hitl_breakpoints = Column(JSONB, nullable=True)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

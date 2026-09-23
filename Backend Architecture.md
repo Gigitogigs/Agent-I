@@ -209,6 +209,11 @@ CREATE TABLE workspace_agent_config (
                                          --        "action_agent":    "You execute verified actions...",
                                          --        "escalation_agent":"You prepare escalation summaries..."}
                                          -- NULL entries fall back to the built-in default prompt for that agent.
+
+    custom_tools            JSONB, -- e.g. {"orchestrator": ["route_request"], "action_agent": ["issue_refund", "cancel_order"]}
+    custom_guardrails       JSONB, -- e.g. {"action_agent": {"pii": true, "refundCap": 50}}
+    custom_hitl_breakpoints JSONB, -- e.g. {"action_agent": [{"id": "b2", "label": "Refund Exceeds Cap", "expiryBehavior": "auto-reject", "slaWindowMins": 60}]}
+    
     updated_at       TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(workspace_id)
 );

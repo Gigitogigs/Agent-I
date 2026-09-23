@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, ForeignKey, DateTime, Index, ARRAY
+from sqlalchemy import Column, String, Integer, ForeignKey, DateTime, Index, ARRAY, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
@@ -24,11 +24,16 @@ class Document(Base):
 
     __table_args__ = (
         Index("ix_documents_workspace_id_status", "workspace_id", "status"),
+        CheckConstraint("file_size_bytes >= 0", name="chk_doc_file_size_positive"),
     )
 
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
-    __table_args__ = ({"schema": "rag"})
+    __table_args__ = (
+        CheckConstraint("chunk_index >= 0", name="chk_chunk_idx_positive"),
+        CheckConstraint("token_count >= 0", name="chk_token_count_positive"),
+        {"schema": "rag"}
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)

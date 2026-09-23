@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 from backend.api.dependencies import get_db
-from backend.api.schemas.chat import ChatRequest, ChatResponse
-from backend.services.chat_service import process_chat_turn
+from typing import Optional
+from backend.api.schemas.chat import ChatRequest, ChatResponse, ConversationListResponse, ConversationDetailOut
+from backend.services.chat_service import process_chat_turn, list_conversations, get_conversation_detail
 from backend.api.dependencies import require_min_role
 from backend.db.models.chat import Conversation
 
@@ -61,3 +62,59 @@ async def submit_chat_message(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Agent error: {str(e)}"
         )
+
+
+@router.get(
+    "/{workspace_id}/conversations",
+    response_model=ConversationListResponse,
+    dependencies=[Depends(require_min_role("read_only"))]
+)
+async def get_conversations(
+    workspace_id: UUID,
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+    cursor: Optional[str] = None,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Returns a paginated list of conversations for a workspace.
+    """
+    cursor_date, cursor_id = None, None
+    if cursor:
+        try:
+            parts = cursor.split(",")
+            cursor_date = parts[0]
+            cursor_id = UUID(parts[1])
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid cursor format")
+            
+    return await list_conversations(
+        db=db,
+        workspace_id=workspace_id,
+        status=status,
+        search=search,
+        limit=limit,
+        cursor_date=cursor_date,
+        cursor_id=cursor_id
+    )
+
+
+@router.get(
+    "/{workspace_id}/conversations/{conversation_id}",
+    response_model=ConversationDetailOut,
+    dependencies=[Depends(require_min_role("read_only"))]
+)
+async def get_conversation(
+    workspace_id: UUID,
+    conversation_id: UUID,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Returns full details for a specific conversation including transcript.
+    """
+    detail = await get_conversation_detail(db, workspace_id, conversation_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+        
+    return detail

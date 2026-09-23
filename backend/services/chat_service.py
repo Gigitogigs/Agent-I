@@ -2,7 +2,8 @@ import asyncio
 import json
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, desc
+from sqlalchemy.orm import selectinload
 from langchain_core.messages import HumanMessage
 
 from backend.db.models.chat import Conversation, ConversationTurn
@@ -150,3 +151,115 @@ async def process_chat_turn(
         "turn_id": ai_turn.id,
         "subagent_results": subagent_results
     }
+
+
+async def list_conversations(
+    db: AsyncSession,
+    workspace_id: UUID,
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = 50,
+    cursor_date: Optional[str] = None,
+    cursor_id: Optional[UUID] = None
+) -> dict:
+    """Lists conversations with optional status filtering, full-text search, and cursor-based pagination."""
+    # We query conversations and optionally load turns to determine agents_involved
+    # But a cleaner way is just to selectinload the turns and map them in python.
+    stmt = select(Conversation).where(Conversation.workspace_id == workspace_id).options(selectinload(Conversation.turns))
+    
+    if status and status != "ALL":
+        stmt = stmt.where(Conversation.status == status)
+        
+    if search:
+        # PostgreSQL full-text search using the tsvector column
+        stmt = stmt.where(Conversation.search_vector.match(search, postgresql_regconfig='english'))
+        
+    if cursor_date and cursor_id:
+        from datetime import datetime
+        cursor_dt = datetime.fromisoformat(cursor_date)
+        # Cursor pagination: (created_at, id) < (cursor_date, cursor_id) for descending sort
+        stmt = stmt.where(
+            (Conversation.created_at < cursor_dt) | 
+            ((Conversation.created_at == cursor_dt) & (Conversation.id < cursor_id))
+        )
+        
+    stmt = stmt.order_by(desc(Conversation.created_at), desc(Conversation.id)).limit(limit)
+    
+    result = await db.execute(stmt)
+    conversations = result.scalars().all()
+    
+    items = []
+    for conv in conversations:
+        # Determine unique agents involved from turns
+        agents_involved = list(set([t.agent_id for t in conv.turns if t.agent_id]))
+        items.append({
+            "id": conv.id,
+            "status": conv.status,
+            "customer_identifier": conv.customer_identifier,
+            "customer_name": conv.customer_name,
+            "summary": conv.summary,
+            "agentsInvolved": agents_involved,
+            "updated_at": conv.updated_at
+        })
+        
+    next_cursor = None
+    if len(items) == limit:
+        last_item = conversations[-1]
+        next_cursor = f"{last_item.created_at.isoformat()},{last_item.id}"
+        
+    return {
+        "items": items,
+        "nextCursor": next_cursor
+    }
+
+
+async def get_conversation_detail(db: AsyncSession, workspace_id: UUID, conversation_id: UUID) -> Optional[dict]:
+    """Gets the full details of a single conversation, including its transcript."""
+    stmt = (
+        select(Conversation)
+        .where(Conversation.workspace_id == workspace_id)
+        .where(Conversation.id == conversation_id)
+        .options(selectinload(Conversation.turns))
+    )
+    result = await db.execute(stmt)
+    conv = result.scalar_one_or_none()
+    
+    if not conv:
+        return None
+        
+    agents_involved = list(set([t.agent_id for t in conv.turns if t.agent_id]))
+    
+    # Sort turns by index
+    sorted_turns = sorted(conv.turns, key=lambda t: t.turn_index)
+    
+    transcript = []
+    for t in sorted_turns:
+        transcript.append({
+            "id": t.id,
+            "role": t.role,
+            "content": t.content,
+            "created_at": t.created_at,
+            "agent_id": t.agent_id
+        })
+        
+    return {
+        "id": conv.id,
+        "status": conv.status,
+        "customer_identifier": conv.customer_identifier,
+        "customer_name": conv.customer_name,
+        "summary": conv.summary,
+        "agentsInvolved": agents_involved,
+        "updated_at": conv.updated_at,
+        "created_at": conv.created_at,
+        "transcript": transcript
+    }
+
+
+async def update_conversation_summary(db: AsyncSession, workspace_id: UUID, conversation_id: UUID, summary: str):
+    """Updates the summary for a conversation."""
+    stmt = select(Conversation).where(Conversation.workspace_id == workspace_id).where(Conversation.id == conversation_id)
+    result = await db.execute(stmt)
+    conv = result.scalar_one_or_none()
+    if conv:
+        conv.summary = summary
+        await db.commit()

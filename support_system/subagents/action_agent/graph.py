@@ -47,7 +47,7 @@ from .schema import ActionRequest, ActionResult
 # Ensure imports resolve to our project roots
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 from support_system.mcp_client.client import MCPToolClient
-from support_system.approvals.app.db import get_conn, release_conn
+from backend.db.session import get_legacy_sync_pool
 
 
 class AgentState(TypedDict):
@@ -75,7 +75,8 @@ def execute_tool(state: AgentState, config: RunnableConfig) -> dict:
 
     idempotency_key = f"{req.session_id}:{req.turn_id}:{req.action_type}"
     
-    conn = get_conn()
+    pool = get_legacy_sync_pool()
+    conn = pool.getconn()
     cur = conn.cursor()
     
     try:
@@ -92,7 +93,7 @@ def execute_tool(state: AgentState, config: RunnableConfig) -> dict:
             # Action already executed in a previous attempt
             conn.rollback()
             cur.close()
-            release_conn(conn)
+            pool.putconn(conn)
             result = ActionResult(
                 success=True,
                 data={"status": "skipped", "reason": "already executed"},
@@ -104,7 +105,7 @@ def execute_tool(state: AgentState, config: RunnableConfig) -> dict:
     except Exception as e:
         conn.rollback()
         cur.close()
-        release_conn(conn)
+        pool.putconn(conn)
         raise e
 
     agent_config = config.get("configurable", {}).get("agent_config", {}).get("subagents", {}).get("action_agent", {})
@@ -129,7 +130,7 @@ def execute_tool(state: AgentState, config: RunnableConfig) -> dict:
             conn.rollback()
         finally:
             cur.close()
-            release_conn(conn)
+            pool.putconn(conn)
             
         result = ActionResult(
             success=False,
@@ -151,7 +152,7 @@ def execute_tool(state: AgentState, config: RunnableConfig) -> dict:
         raise e
     finally:
         cur.close()
-        release_conn(conn)
+        pool.putconn(conn)
     
     result = ActionResult(
         success=mcp_result.get("success", False),
