@@ -14,6 +14,7 @@ from backend.db.models.user import User
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+from backend.core.arq import get_arq_redis
 try:
     from langgraph.types import Command
     from support_system.subagents.escalation_agent.graph import escalation_agent
@@ -78,11 +79,20 @@ async def approve_request(db: AsyncSession, workspace_id: UUID, app_id: UUID, cu
     
     await db.commit()
     
-    # Resume LangGraph escalation agent
-    _resume_graph(str(approval.conversation_id), "approved", None, current_user.email)
+    # Enqueue ARQ task to resume LangGraph escalation agent
+    redis = await get_arq_redis()
+    await redis.enqueue_job(
+        "resume_agent_graph", 
+        session_id=str(approval.conversation_id), 
+        decision_payload={
+            "status": "approved",
+            "operator_note": None,
+            "resolved_by": current_user.email
+        }
+    )
 
 async def reject_request(db: AsyncSession, workspace_id: UUID, app_id: UUID, reason: str, current_user: User) -> None:
-    """Reject a request and resume the LangGraph agent."""
+    """Reject a request and enqueue an ARQ task to resume the LangGraph agent."""
     approval = await db.scalar(
         select(ApprovalRequest)
         .where(ApprovalRequest.id == app_id)
@@ -102,26 +112,14 @@ async def reject_request(db: AsyncSession, workspace_id: UUID, app_id: UUID, rea
     
     await db.commit()
     
-    # Resume LangGraph escalation agent
-    _resume_graph(str(approval.conversation_id), "rejected", reason, current_user.email)
-
-def _resume_graph(session_id: str, status: str, operator_note: Optional[str], resolved_by: str) -> None:
-    """Synchronously resume the LangGraph graph."""
-    if not escalation_agent:
-        print(f"[WARN] Approval recorded but LangGraph resume skipped (escalation_agent not imported). Session: {session_id}")
-        return
-        
-    decision_payload = {
-        "status": status,
-        "operator_note": operator_note,
-        "resolved_by": resolved_by,
-    }
-    try:
-        escalation_agent.invoke(
-            Command(resume=decision_payload),
-            config={"configurable": {"thread_id": session_id, "checkpoint_id": ""}} # Config needs to match agent's expectations
-        )
-        print(f"[INFO] Successfully resumed LangGraph for session {session_id}")
-    except Exception as exc:
-        print(f"[ERROR] DB updated but graph resume failed for session '{session_id}': {exc}")
-        # Note: If this fails, the DB is already updated so we log the error. The graph can be manually resumed later.
+    # Enqueue ARQ task to resume LangGraph escalation agent
+    redis = await get_arq_redis()
+    await redis.enqueue_job(
+        "resume_agent_graph", 
+        session_id=str(approval.conversation_id), 
+        decision_payload={
+            "status": "rejected",
+            "operator_note": reason,
+            "resolved_by": current_user.email
+        }
+    )

@@ -13,6 +13,25 @@ from backend.core.config import settings
 # Import the task from the service
 # We will create this task in backend/services/knowledge_service.py
 from backend.services.knowledge_service import process_document_task
+from langgraph.types import Command
+import asyncio
+
+async def resume_agent_graph(ctx: Dict[Any, Any], session_id: str, decision_payload: dict) -> None:
+    """
+    Executes the heavy LangGraph agent resume logic safely in the background.
+    """
+    try:
+        from support_system.subagents.escalation_agent.graph import escalation_agent
+        
+        # We run the synchronous invoke inside asyncio.to_thread to prevent blocking the ARQ event loop
+        await asyncio.to_thread(
+            escalation_agent.invoke,
+            Command(resume=decision_payload),
+            {"configurable": {"thread_id": session_id, "checkpoint_id": ""}}
+        )
+        print(f"[INFO] Successfully resumed LangGraph for session {session_id}")
+    except Exception as exc:
+        print(f"[ERROR] Graph resume failed for session '{session_id}': {exc}")
 
 async def startup(ctx: Dict[Any, Any]) -> None:
     """
@@ -46,7 +65,7 @@ if "redis://" in redis_url:
 
 # ARQ Worker Settings
 class WorkerSettings:
-    functions = [process_document_task]
+    functions = [process_document_task, resume_agent_graph]
     redis_settings = RedisSettings(host=host, port=port, database=database)
     on_startup = startup
     on_shutdown = shutdown

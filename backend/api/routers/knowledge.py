@@ -31,20 +31,7 @@ ALLOWED_EXTENSIONS = {
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-async def get_arq_redis():
-    redis_url = settings.REDIS_URL
-    host = "localhost"
-    port = 6379
-    database = 0
-    if "redis://" in redis_url:
-        parts = redis_url.replace("redis://", "").split("/")
-        host_port = parts[0].split(":")
-        host = host_port[0]
-        if len(host_port) > 1:
-            port = int(host_port[1])
-        if len(parts) > 1 and parts[1]:
-            database = int(parts[1])
-    return await create_pool(RedisSettings(host=host, port=port, database=database))
+from backend.core.arq import get_arq_redis
 
 @router.get(
     "/{workspace_id}/knowledge-base",
