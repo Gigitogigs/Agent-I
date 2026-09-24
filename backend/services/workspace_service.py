@@ -83,3 +83,82 @@ async def cancel_workspace_deletion(db: AsyncSession, workspace_id: UUID) -> Non
         
     workspace.deletion_scheduled_at = None
     await db.commit()
+
+async def get_workspace_summary(db: AsyncSession, workspace_id: UUID) -> dict:
+    import asyncio
+    from backend.db.models.approvals import ApprovalRequest
+    from backend.db.models.chat import Conversation
+    from sqlalchemy import desc, func
+    
+    # 1. Fetch top 3 urgent pending approvals (oldest first)
+    approvals_stmt = (
+        select(ApprovalRequest)
+        .where(ApprovalRequest.workspace_id == workspace_id, ApprovalRequest.status == "pending")
+        .order_by(ApprovalRequest.created_at.asc())
+        .limit(3)
+    )
+    
+    # 2. Fetch recent 5 conversations
+    conv_stmt = (
+        select(Conversation)
+        .where(Conversation.workspace_id == workspace_id)
+        .order_by(desc(Conversation.created_at))
+        .limit(5)
+    )
+    
+    # 3. Stats (just total pending approvals and total conversations for now)
+    total_app_stmt = select(func.count(ApprovalRequest.id)).where(ApprovalRequest.workspace_id == workspace_id, ApprovalRequest.status == "pending")
+    total_conv_stmt = select(func.count(Conversation.id)).where(Conversation.workspace_id == workspace_id)
+    
+    # Run them concurrently
+    app_res, conv_res, total_app_res, total_conv_res = await asyncio.gather(
+        db.execute(approvals_stmt),
+        db.execute(conv_stmt),
+        db.execute(total_app_stmt),
+        db.execute(total_conv_stmt)
+    )
+    
+    pending_approvals = app_res.scalars().all()
+    recent_conversations = conv_res.scalars().all()
+    total_pending = total_app_res.scalar_one_or_none() or 0
+    total_convs = total_conv_res.scalar_one_or_none() or 0
+    
+    # Mapping to dicts
+    approvals_out = [
+        {
+            "id": a.id,
+            "session_id": a.session_id,
+            "agent_id": a.agent_id,
+            "action_type": a.action_type,
+            "risk_level": a.risk_level,
+            "status": a.status,
+            "created_at": a.created_at,
+            "expires_at": a.expires_at,
+            "payload": a.payload,
+            "reviewer_role": a.reviewer_role,
+        } for a in pending_approvals
+    ]
+    
+    conversations_out = [
+        {
+            "id": c.id,
+            "workspace_id": c.workspace_id,
+            "user_id": c.user_id,
+            "metadata_": c.metadata_,
+            "status": c.status,
+            "created_at": c.created_at,
+            "updated_at": c.updated_at
+        } for c in recent_conversations
+    ]
+    
+    return {
+        "pending_approvals": approvals_out,
+        "recent_conversations": conversations_out,
+        "stats": {
+            "total_pending_approvals": total_pending,
+            "total_conversations": total_convs,
+            "resolution_rate": "98.5%", # mock
+            "avg_handling_time": "1m 45s" # mock
+        },
+        "system_health": "Healthy"
+    }

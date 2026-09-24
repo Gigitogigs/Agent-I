@@ -52,3 +52,14 @@ async def restore_workspace(
 ):
     await cancel_workspace_deletion(db, workspace_id)
     return MessageResponse(message="Workspace deletion cancelled.")
+
+from backend.api.schemas.workspace import HomepageSummaryOut
+from backend.services.workspace_service import get_workspace_summary
+
+@router.get("/{workspace_id}/summary", response_model=HomepageSummaryOut)
+async def get_summary(
+    workspace_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    _membership = Depends(require_role("read-only")) # any role can read summary
+):
+    return await get_workspace_summary(db, workspace_id)
