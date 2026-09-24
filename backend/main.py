@@ -61,6 +61,8 @@ app.include_router(chat.router, prefix=settings.API_V1_STR, tags=["chat"])
 app.include_router(agents.router, prefix=settings.API_V1_STR, tags=["agents"])
 app.include_router(knowledge.router, prefix=settings.API_V1_STR, tags=["knowledge"])
 app.include_router(providers.router, prefix=settings.API_V1_STR, tags=["providers"])
+from backend.api.routers import settings as settings_router
+app.include_router(settings_router.router, prefix=settings.API_V1_STR, tags=["settings"])
 
 if __name__ == "__main__":
     import uvicorn
