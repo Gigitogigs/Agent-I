@@ -14,11 +14,21 @@ from backend.api.routers import knowledge
 from backend.api.routers import providers
 from backend.middleware import WorkspaceContextMiddleware
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from backend.scheduler import start_scheduler, scheduler
+    start_scheduler()
+    yield
+    scheduler.shutdown()
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
     docs_url=f"{settings.API_V1_STR}/docs",
     redoc_url=f"{settings.API_V1_STR}/redoc",
+    lifespan=lifespan,
 )
 
 # ---------------------------------------------------------------------------
