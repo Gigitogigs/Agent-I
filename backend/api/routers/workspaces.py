@@ -14,6 +14,8 @@ from backend.services.workspace_service import (
     schedule_workspace_deletion,
     cancel_workspace_deletion,
 )
+from backend.services.dashboard_service import get_homepage_summary
+from backend.api.schemas.dashboard import HomepageSummaryOut
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
@@ -53,13 +55,13 @@ async def restore_workspace(
     await cancel_workspace_deletion(db, workspace_id)
     return MessageResponse(message="Workspace deletion cancelled.")
 
-from backend.api.schemas.workspace import HomepageSummaryOut
-from backend.services.workspace_service import get_workspace_summary
-
 @router.get("/{workspace_id}/summary", response_model=HomepageSummaryOut)
-async def get_summary(
+async def get_dashboard_summary(
     workspace_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _membership = Depends(require_role("read-only")) # any role can read summary
+    _membership = Depends(require_role("operator"))
 ):
-    return await get_workspace_summary(db, workspace_id)
+    """
+    Returns the composite BFF data payload for the workspace dashboard.
+    """
+    return await get_homepage_summary(db, workspace_id)
