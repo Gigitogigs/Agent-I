@@ -65,15 +65,27 @@ class PasswordResetConfirmBody(BaseModel):
 
 class TokenResponse(BaseModel):
     """
-    Returned by /login and /refresh.
-
-    The refresh_token is also set as an HttpOnly cookie by the route handler.
-    It is included here so the frontend can read it if cookie-based auth is
-    not available (e.g. React Native).
+    Returned by /refresh.
     """
     access_token: str
     token_type: str = "bearer"
     expires_in: int  # seconds until access token expires
+
+class LoginUserOut(BaseModel):
+    id: str
+    name: str
+    email: str
+    avatarUrl: Optional[str] = None
+
+class LoginResponse(BaseModel):
+    user: LoginUserOut
+    activeWorkspaceId: Optional[str] = None
+    workspaceDeletionStatus: Optional[str] = None
+    
+    # We include these for mobile compatibility
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
 
 
 class MessageResponse(BaseModel):

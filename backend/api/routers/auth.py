@@ -18,6 +18,7 @@ from typing import Optional
 from backend.api.dependencies import get_db, get_current_user
 from backend.api.schemas.auth import (
     LoginRequest,
+    LoginResponse,
     MessageResponse,
     PasswordResetConfirmBody,
     PasswordResetRequestBody,
@@ -85,7 +86,7 @@ async def register(
 
 @router.post(
     "/login",
-    response_model=TokenResponse,
+    response_model=LoginResponse,
     summary="Authenticate and receive tokens",
 )
 async def login(
@@ -95,6 +96,40 @@ async def login(
     db: AsyncSession = Depends(get_db),
 ):
     user = await authenticate_user(db, email=body.email, password=body.password)
+    
+    # We must explicitly load workspaces for the login response
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    from backend.db.models.workspace_member import WorkspaceMember
+    from backend.api.schemas.auth import LoginUserOut
+    
+    stmt = (
+        select(WorkspaceMember)
+        .where(WorkspaceMember.user_id == user.id)
+        .where(WorkspaceMember.status == "active")
+        .options(selectinload(WorkspaceMember.workspace))
+    )
+    res = await db.execute(stmt)
+    memberships = res.scalars().all()
+    
+    active_workspace_id = None
+    workspace_deletion_status = None
+    
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    
+    if user.deletion_scheduled_at:
+        # Check if within 48h grace period
+        if now <= user.deletion_scheduled_at + timedelta(hours=48):
+            workspace_deletion_status = "account_grace_period"
+    elif memberships:
+        # Just pick the first workspace as active for now
+        first_member = memberships[0]
+        active_workspace_id = str(first_member.workspace_id)
+        if first_member.workspace.deletion_scheduled_at:
+            if now <= first_member.workspace.deletion_scheduled_at + timedelta(hours=48):
+                workspace_deletion_status = "grace_period"
+    
     access_token, raw_refresh = await create_session(
         db,
         user,
@@ -102,7 +137,16 @@ async def login(
         ip_address=request.client.host if request.client else None,
     )
     _set_refresh_cookie(response, raw_refresh)
-    return TokenResponse(
+    
+    return LoginResponse(
+        user=LoginUserOut(
+            id=str(user.id),
+            name=user.full_name,
+            email=user.email,
+            avatarUrl=user.avatar_url
+        ),
+        activeWorkspaceId=active_workspace_id,
+        workspaceDeletionStatus=workspace_deletion_status,
         access_token=access_token,
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
