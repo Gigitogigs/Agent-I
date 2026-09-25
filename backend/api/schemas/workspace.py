@@ -25,14 +25,3 @@ class WorkspaceCreate(BaseModel):
 class PasswordConfirmBody(BaseModel):
     """Used for high-risk actions like deleting an account or workspace."""
     password: str
-
-# ---------------------------------------------------------------------------
-# Homepage Summary
-# ---------------------------------------------------------------------------
-from typing import Any, Dict, List
-
-class HomepageSummaryOut(BaseModel):
-    pending_approvals: List[Any]
-    recent_conversations: List[Any]
-    stats: Dict[str, Any]
-    system_health: str

@@ -112,11 +112,19 @@ async def process_chat_turn(
     # 2. Build agent config
     agent_config_dict = await build_agent_config(db, workspace_id)
     
+    # Fetch conversation to get customer_identifier for memory
+    conv_result = await db.execute(
+        select(Conversation).where(Conversation.id == conversation_id)
+    )
+    conv = conv_result.scalar_one_or_none()
+    customer_id = conv.customer_identifier if conv and conv.customer_identifier else str(conversation_id)
+    
     # 3. Invoke LangGraph synchronously in a thread
     def run_graph_sync():
         state = {
             "messages": [HumanMessage(content=message)],
-            "session_id": str(conversation_id)
+            "session_id": str(conversation_id),
+            "user_id": customer_id
         }
         config = {
             "configurable": {

@@ -56,6 +56,56 @@ from support_system.subagents.retrieval_agent.graph import invoke_retrieval_agen
 from support_system.subagents.escalation_agent.graph import invoke_escalation_agent
 
 from .tools.tool_registry import resolve_tools, ALL_TOOLS
+import json
+
+# ---------------------------------------------------------------------------
+# Node: save_memory
+# ---------------------------------------------------------------------------
+
+def save_memory(state: AgentState, config: RunnableConfig, store: BaseStore) -> dict:
+    """
+    Extracts new customer facts from the conversation and updates long-term memory.
+    Runs automatically before the graph ends.
+    """
+    user_id = state.get("user_id")
+    if not user_id:
+        return {}
+
+    namespace = ("customer_facts",)
+    item = store.get(namespace, user_id)
+    existing_facts = item.value if item else {}
+
+    agent_config = config.get("configurable", {}).get("agent_config", {}).get("orchestrator", {})
+    llm = build_model(agent_config)
+
+    prompt = f"""You are a background memory process. 
+Extract long-term customer facts, preferences, or details from the conversation.
+Merge any new facts with the existing facts below.
+
+Existing Facts:
+{json.dumps(existing_facts, indent=2)}
+
+You must return a JSON object with a single key "facts" containing the updated dictionary of facts.
+Do not wrap it in markdown block, just output the raw JSON."""
+
+    # We only need the last few turns (including the final synthesis)
+    messages = [SystemMessage(content=prompt)] + state["messages"][-2:] 
+    try:
+        response = llm.invoke(messages)
+        content = response.content.strip()
+        if content.startswith("```json"):
+            content = content[7:-3]
+        if content.startswith("```"):
+            content = content[3:-3]
+        data = json.loads(content)
+        new_facts = data.get("facts", existing_facts)
+        store.put(namespace, user_id, new_facts)
+        return {"customer_context": new_facts}
+    except Exception as e:
+        print(f"Failed to update memory: {e}")
+        return {}
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +351,7 @@ builder.add_node("orchestrator_agent", orchestrator_agent)
 builder.add_node("guardrail_check", guardrail_check)
 builder.add_node("execute_tools", build_execute_tools_node(ALL_TOOLS))
 builder.add_node("synthesise", synthesise)
+builder.add_node("save_memory", save_memory)
 
 builder.add_edge(START, "load_memory")
 builder.add_edge("load_memory", "orchestrator_agent")
@@ -315,7 +366,8 @@ builder.add_conditional_edges(
 builder.add_edge("guardrail_check", "execute_tools")
 # Loop back: LLM evaluates the ToolMessage result and decides next action
 builder.add_edge("execute_tools", "orchestrator_agent")
-builder.add_edge("synthesise", END)
+builder.add_edge("synthesise", "save_memory")
+builder.add_edge("save_memory", END)
 
 root_agent = builder.compile(
     checkpointer=get_checkpointer(),
