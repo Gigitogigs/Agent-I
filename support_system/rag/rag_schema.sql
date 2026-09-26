@@ -30,6 +30,7 @@ CREATE INDEX IF NOT EXISTS documents_metadata_idx
 -- Past resolved tickets (retrieval-augmented troubleshooting)
 CREATE TABLE IF NOT EXISTS rag.resolved_tickets (
     id         BIGSERIAL PRIMARY KEY,
+    workspace_id UUID NOT NULL,
     ticket_id  TEXT NOT NULL UNIQUE,
     summary    TEXT NOT NULL,
     resolution TEXT NOT NULL,

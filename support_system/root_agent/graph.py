@@ -49,7 +49,7 @@ from support_system.memory.store import get_store
 from langgraph.store.base import BaseStore
 from langchain_core.runnables.config import RunnableConfig
 
-from langchain_core.messages import BaseMessage, SystemMessage, AIMessage, ToolMessage
+from langchain_core.messages import BaseMessage, SystemMessage, AIMessage, ToolMessage, RemoveMessage
 from support_system.subagents.escalation_agent.schema import EscalationRequest
 from support_system.subagents.action_agent.graph import invoke_action_agent
 from support_system.subagents.retrieval_agent.graph import invoke_retrieval_agent
@@ -132,6 +132,39 @@ def load_memory(state: AgentState, config: RunnableConfig, store: BaseStore) -> 
     item = store.get(namespace, user_id) if user_id else None
     customer_context = item.value if item else {}
     return {"customer_context": customer_context}
+
+
+# ---------------------------------------------------------------------------
+# Node: prune_messages
+# ---------------------------------------------------------------------------
+
+def prune_messages(state: AgentState) -> dict:
+    """
+    Prevents unbounded context growth by pruning old messages from the state.
+    Leaves the last MAX_MESSAGES intact, ensuring we don't sever AIMessage -> ToolMessage pairs.
+    """
+    messages = state.get("messages", [])
+    MAX_MESSAGES = 10
+    
+    if len(messages) <= MAX_MESSAGES:
+        return {}
+        
+    # Find safe boundary to avoid breaking AIMessage -> ToolMessage pairs
+    boundary_idx = len(messages) - MAX_MESSAGES
+    
+    while boundary_idx > 0:
+        msg = messages[boundary_idx]
+        if isinstance(msg, ToolMessage):
+            # We are inside a tool response sequence. Backtrack to find the AIMessage.
+            boundary_idx -= 1
+        else:
+            # It's an AIMessage or HumanMessage.
+            break
+            
+    # Return RemoveMessage objects to trigger the `add_messages` reducer to delete them
+    to_delete = [RemoveMessage(id=msg.id) for msg in messages[:boundary_idx] if msg.id]
+    
+    return {"messages": to_delete} if to_delete else {}
 
 
 # ---------------------------------------------------------------------------
@@ -352,9 +385,11 @@ builder.add_node("guardrail_check", guardrail_check)
 builder.add_node("execute_tools", build_execute_tools_node(ALL_TOOLS))
 builder.add_node("synthesise", synthesise)
 builder.add_node("save_memory", save_memory)
+builder.add_node("prune_messages", prune_messages)
 
 builder.add_edge(START, "load_memory")
-builder.add_edge("load_memory", "orchestrator_agent")
+builder.add_edge("load_memory", "prune_messages")
+builder.add_edge("prune_messages", "orchestrator_agent")
 builder.add_conditional_edges(
     "orchestrator_agent",
     should_call_tools,
@@ -365,7 +400,7 @@ builder.add_conditional_edges(
 )
 builder.add_edge("guardrail_check", "execute_tools")
 # Loop back: LLM evaluates the ToolMessage result and decides next action
-builder.add_edge("execute_tools", "orchestrator_agent")
+builder.add_edge("execute_tools", "prune_messages")
 builder.add_edge("synthesise", "save_memory")
 builder.add_edge("save_memory", END)
 

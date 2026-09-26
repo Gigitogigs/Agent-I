@@ -84,7 +84,9 @@ def execute_tool(state: AgentState, config: RunnableConfig) -> dict:
             """
             INSERT INTO approvals.executed_actions (idempotency_key, session_id, turn_id, action_type, payload, status)
             VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (idempotency_key) DO NOTHING
+            ON CONFLICT (idempotency_key) DO UPDATE 
+            SET status = 'pending'
+            WHERE approvals.executed_actions.status = 'failed'
             RETURNING idempotency_key
             """,
             (idempotency_key, req.session_id, req.turn_id, req.action_type, json.dumps(req.params), 'pending')

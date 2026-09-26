@@ -82,8 +82,10 @@ async def upload_document(
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported file extension: {ext}")
         
-    # Save file to disk
-    file_path = os.path.join(UPLOAD_DIR, f"{workspace_id}_{file.filename}")
+    # Save file to disk securely
+    import uuid
+    safe_filename = f"{workspace_id}_{uuid.uuid4()}{ext}"
+    file_path = os.path.join(UPLOAD_DIR, safe_filename)
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
         

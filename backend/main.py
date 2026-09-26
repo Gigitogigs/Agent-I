@@ -38,7 +38,7 @@ app = FastAPI(
 # CORS — must come before WorkspaceContextMiddleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],      # TODO: Replace with specific origins in production
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],      # Replaced "*" with specific origins for dev
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
