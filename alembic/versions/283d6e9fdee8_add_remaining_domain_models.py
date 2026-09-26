@@ -191,9 +191,7 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('workspace_id', 'event_type', 'channel_id', name='uix_workspace_event_channel')
     )
-    op.drop_table('approval_requests', schema='approvals')
-    op.drop_index(op.f('idx_executed_actions_session'), table_name='executed_actions', schema='approvals')
-    op.drop_table('executed_actions', schema='approvals')
+    # We intentionally skip dropping the approvals schema tables to prevent data loss and crashing the action agent
     op.add_column('users', sa.Column('full_name', sa.String(), server_default='Unknown', nullable=False))
     op.add_column('users', sa.Column('reset_password_expires_at', sa.DateTime(timezone=True), nullable=True))
     op.add_column('users', sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True))

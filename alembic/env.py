@@ -57,6 +57,8 @@ def run_migrations_offline() -> None:
     def include_object(object, name, type_, reflected, compare_to):
         if type_ == "schema" and name not in (None, "public", "rag"):
             return False
+        if type_ == "table" and getattr(object, "schema", None) not in (None, "public", "rag"):
+            return False
         if type_ == "table" and name in ("langchain_pg_embedding", "langchain_pg_collection"):
             return False
         return True
@@ -77,6 +79,8 @@ def run_migrations_offline() -> None:
 def do_run_migrations(connection: Connection) -> None:
     def include_object(object, name, type_, reflected, compare_to):
         if type_ == "schema" and name not in (None, "public", "rag"):
+            return False
+        if type_ == "table" and getattr(object, "schema", None) not in (None, "public", "rag"):
             return False
         if type_ == "table" and name in ("langchain_pg_embedding", "langchain_pg_collection"):
             return False
