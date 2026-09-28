@@ -1,10 +1,10 @@
-import os
+﻿import os
 import asyncio
 from datetime import datetime, timezone, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, delete, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from backend.db.session import async_session_maker
+from backend.db.session import AsyncSessionLocal
 
 from backend.db.models.user import User
 from backend.db.models.workspace import Workspace
@@ -63,7 +63,7 @@ async def run_deletion_cleanup():
     print("[BACKGROUND] Running hourly deletion cleanup job...")
     cutoff_time = datetime.now(timezone.utc) - timedelta(hours=48)
     
-    async with async_session_maker() as db:
+    async with AsyncSessionLocal() as db:
         # --- Handle Workspace Deletions ---
         ws_stmt = select(Workspace).where(
             Workspace.deletion_scheduled_at != None,

@@ -1,26 +1,42 @@
-version: '3.8'
-
 services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL + pgvector
+  # Using pgvector/pgvector:pg17 — closer to the host's Postgres 18 than the
+  # old ankane/pgvector:v0.5.1 (which was Postgres 15 and caused pg_dump
+  # version-mismatch errors with \restrict and other pg17+ syntax).
+  # ---------------------------------------------------------------------------
   db:
-    image: ankane/pgvector:v0.5.1
+    image: pgvector/pgvector:pg17
     container_name: autonomi_db
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ForcaBarca%402026!
+      POSTGRES_PASSWORD: ForcaBarca@2026!
       POSTGRES_DB: support_system
+      # Prevents pg_hba.conf auth failures for the health check running as the same user
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
     ports:
-      - "5432:5432"
+      - "5433:5432"   # Expose on 5433 to avoid clashing with the host's Postgres 18 on 5432
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # full_schema.sql is auto-applied by Postgres on first boot (empty data volume only).
+      # The init scripts run alphabetically; prefixed with 1- to guarantee order.
+      - ./full_schema.sql:/docker-entrypoint-initdb.d/1-full_schema.sql:ro
     healthcheck:
+      # -U and -d must match POSTGRES_USER / POSTGRES_DB above
       test: ["CMD-SHELL", "pg_isready -U postgres -d support_system"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 60s   # Give Postgres ample time to finish running the init SQL before health checks start
 
+  # ---------------------------------------------------------------------------
+  # Redis — task queue (ARQ) + idempotency cache
+  # ---------------------------------------------------------------------------
   redis:
     image: redis:7-alpine
     container_name: autonomi_redis
+    restart: unless-stopped
     ports:
       - "6379:6379"
     volumes:
@@ -30,19 +46,27 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 5s
 
+  # ---------------------------------------------------------------------------
+  # FastAPI application server
+  # ---------------------------------------------------------------------------
   api:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile
+    image: agent-i-api
     container_name: autonomi_api
+    restart: unless-stopped
     ports:
       - "8000:8000"
     env_file:
-      - .env
+      - .env   # Base env vars (JWT_SECRET, ENCRYPTION_KEY, etc.)
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:ForcaBarca%402026!@db:5432/support_system
-      - REDIS_URL=redis://redis:6379/0
+      # Override DB/Redis URLs to point at the Docker service names, not localhost.
+      # The password is NOT URL-encoded here — SQLAlchemy handles encoding internally.
+      DATABASE_URL: postgresql+asyncpg://postgres:ForcaBarca%402026!@db:5432/support_system
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       db:
         condition: service_healthy
@@ -50,18 +74,20 @@ services:
         condition: service_healthy
     command: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
-      - .:/app
+      - .:/app   # Live-reload: mount source code so changes are picked up without rebuilding
 
+  # ---------------------------------------------------------------------------
+  # ARQ background worker
+  # ---------------------------------------------------------------------------
   worker:
-    build: 
-      context: .
-      dockerfile: Dockerfile
+    image: agent-i-api   # Reuse the already-built API image — no second build needed
     container_name: autonomi_worker
+    restart: unless-stopped
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:ForcaBarca%402026!@db:5432/support_system
-      - REDIS_URL=redis://redis:6379/0
+      DATABASE_URL: postgresql+asyncpg://postgres:ForcaBarca%402026!@db:5432/support_system
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       db:
         condition: service_healthy

@@ -8,8 +8,8 @@ RUN pip install uv
 # Copy the requirements files
 COPY pyproject.toml requirements.txt uv.lock* ./
 
-# Install dependencies using uv
-RUN uv pip install --system -r requirements.txt
+# Install dependencies using uv (fetching CPU-only PyTorch to save ~2GB of CUDA downloads)
+RUN uv pip install --system --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match -r requirements.txt
 
 # Copy the rest of the application
 COPY . .
