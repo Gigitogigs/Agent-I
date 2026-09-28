@@ -1,68 +1,94 @@
 # Architecture
 
-The Autonomi Support System uses a multi-agent orchestrated pattern backed by a FastAPI HTTP server, a PostgreSQL database (with pgvector), and an ARQ task worker. 
+> Source of truth: `backend/`, `support_system/`, `backend/api/routers/`. Last verified 2026-09-28.
 
-## System Components
-1. **API Server (FastAPI)**: Stateless HTTP server that handles authentication, workspace management, and incoming chat turns. No WebSockets are used; all chat interactions are HTTP POSTs.
-2. **Background Worker (ARQ + Redis)**: Handles long-running or non-blocking tasks, specifically document processing and async LangGraph resumption after an operator approves a high-risk action.
-3. **Database (PostgreSQL + pgvector)**: Acts as the unified storage layer. Stores application state, LangGraph checkpoints (for pausing/resuming graphs), and document embeddings for the Retrieval Agent.
-4. **Agent Orchestrator (LangGraph)**: The core reasoning engine. A ReAct loop that routes between long-term memory retrieval, guardrail checks, and subagent tools.
-5. **Next.js Frontend (External)**: An external repository that provides the admin UI.
+## 1. Process Model
 
-## Data Flow: Standard Conversation Turn
-```mermaid
-sequenceDiagram
-    participant C as Client (HTTP)
-    participant API as FastAPI
-    participant LG as LangGraph (root_agent)
-    participant DB as Postgres (Checkpoints)
-    participant Sub as Subagents
+Three long-running processes constitute the backend:
 
-    C->>API: POST /api/v1/chat/... (message)
-    API->>LG: invoke(thread_id, message)
-    LG->>DB: load_memory
-    LG->>LG: orchestrator_agent (LLM decides next action)
-    LG->>LG: guardrail_check (Risk=LOW)
-    LG->>Sub: execute_tools (e.g. retrieval_agent)
-    Sub-->>LG: tool_results
-    LG->>LG: orchestrator_agent (LLM synthesises reply)
-    LG->>DB: save_memory
-    LG-->>API: Final AIMessage
-    API-->>C: 200 OK (Reply)
+| Process | Start command | Role |
+|---|---|---|
+| **API server** | `uvicorn backend.main:app` | Serves HTTP and WebSocket connections |
+| **ARQ worker** | `python -m arq backend.worker.WorkerSettings` | Runs background tasks (document processing, graph resumption) |
+| **APScheduler** | Started automatically inside the API process via `lifespan` | Periodic cleanup (hourly hard-delete of soft-deleted workspaces) |
+
+## 2. Chat Transport
+
+The system exposes **two parallel chat interfaces** for the same conversation:
+
+### 2a. HTTP (Stateless)
+`POST /api/v1/workspaces/{workspace_id}/conversations/{conversation_id}/chat`
+
+- **Request**: `{ "message": "string" }` + optional `Idempotency-Key` header
+- **Behavior**: Saves the user turn to Postgres, then calls `root_agent.invoke(...)` via `asyncio.to_thread` (blocking the LangGraph call off the async event loop), saves the agent turn, and returns the full response.
+- **Idempotency**: If an `Idempotency-Key` header is present, the server acquires a Redis lock (`SET nx=True`). Duplicate in-flight requests get a `409 Conflict`. Once the response is produced, it is cached in Redis for 24 hours so subsequent retries return the cached result instantly.
+
+### 2b. WebSocket (Streaming)
+`WS /api/v1/workspaces/{workspace_id}/conversations/{conversation_id}/ws`
+
+- **Auth**: JWT passed in the `sec-websocket-protocol` header as `access_token.<token>`. Workspace membership is verified before the connection is accepted.
+- **Protocol** (client → server):
+  - `{ "type": "ping" }` → server replies `{ "type": "pong" }`
+  - `{ "type": "message", "content": "..." }` → triggers the agent
+- **Protocol** (server → client):
+  - `{ "type": "agent_status", "status": "thinking" }` — sent immediately on message receipt
+  - `{ "type": "token", "content": "..." }` — one frame per streamed LLM token (from `root_agent.astream_events`, filtered to the `synthesise` node)
+  - `{ "type": "turn_complete", "turn_id": "...", "subagent_results": {...} }` — final frame once the full turn is saved to DB
+  - `{ "type": "error", "detail": "..." }` — on any agent or parse error
+
+The `ConnectionManager` in `backend/api/ws_manager.py` maintains a single `Dict[conversation_id → WebSocket]`, so only one active WebSocket per conversation is supported.
+
+## 3. Agent Graph
+
+```
+root_agent (ReAct loop)
+│
+├─ guardrail_check  ← intercepts tool calls with HIGH/CRITICAL risk
+│   └─ if risky: overrides tool call → escalation_agent
+│
+├─ retrieval_agent   (HyDE vector search against pgvector)
+├─ action_agent      (MCP proxy: issue_refund, cancel_order, etc.)
+│   └─ idempotency_key = session_id + turn_id + action_type
+│       written to approvals.executed_actions before execution
+└─ escalation_agent  (HITL)
+    └─ calls interrupt() → graph state frozen in Postgres checkpointer
+        └─ resumed by ARQ task `resume_agent_graph` after operator approval
 ```
 
-## Data Flow: High-Risk Action (HITL)
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant API as FastAPI
-    participant LG as LangGraph (root_agent)
-    participant ARQ as ARQ Worker
-    
-    C->>API: POST (Request high-risk action)
-    API->>LG: invoke()
-    LG->>LG: orchestrator_agent (Requests Action)
-    LG->>LG: guardrail_check (Risk=HIGH)
-    LG->>LG: Route to escalation_agent
-    LG->>LG: interrupt() (Pauses Graph)
-    LG-->>API: Graph Paused
-    API-->>C: 200 OK (Status: Pending Approval)
-    
-    Note over C, ARQ: Operator reviews request in Frontend
-    C->>API: POST /api/v1/approvals/.../approve
-    API->>ARQ: Enqueue resume_agent_graph(decision)
-    ARQ->>LG: Command(resume=decision)
-    LG->>LG: execute_tools (Action executed)
-    LG->>LG: synthesise (Final Reply)
+## 4. HITL Approval Flow
+
+```
+root_agent
+  │  guardrail detects HIGH risk
+  ▼
+escalation_agent
+  │  1. Writes ApprovalRequest row (status=pending) to DB
+  │  2. Publishes Redis notification to operator channel
+  │  3. Calls interrupt() → graph freezes; HTTP/WS response still returns
+  ▼
+Operator calls POST /api/v1/workspaces/{id}/approvals/{id}/approve
+  │  1. Sets ApprovalRequest.status = approved
+  │  2. Enqueues ARQ task: resume_agent_graph(thread_id, decision)
+  ▼
+ARQ Worker
+  │  Calls root_agent.ainvoke with Command(resume=decision)
+  │  Graph unfreezes, action_agent executes the approved action
+  ▼
+WebSocket / next HTTP poll delivers final response
 ```
 
-## Key Architectural Decisions
-- **HTTP vs WebSockets**: Chat is currently implemented via stateless HTTP POSTs, not WebSockets, to simplify initial scaling and infrastructure.
-- **LangGraph Checkpoints in Postgres**: By writing LangGraph checkpoints directly to Postgres, agent executions can be safely paused (interrupt) and resumed by entirely different worker instances.
-- **Guardrails Pre-empt Subagents**: The Orchestrator's requested tool calls are intercepted and vetted *before* being executed by the Action Agent, ensuring dangerous parameters are caught early.
+## 5. Data Stores
 
-## Known Limitations & Gaps
-- **Single Postgres Instance / No True RLS Multi-tenancy**: While multi-tenancy is modeled via `workspace_id`, the API connects as a standard Postgres user; true Row-Level Security (RLS) enforcement at the connection layer is not currently implemented.
-- **Hybrid Search**: Currently, retrieval relies purely on dense vector similarity search; BM25 or hybrid cross-encoder reranking is not implemented in the current iteration.
+| Store | Purpose |
+|---|---|
+| **PostgreSQL** | Conversations, turns, workspaces, users, approval requests, document chunks (`rag` schema), LangGraph checkpoints (`checkpoints` schema), long-term memory (`memory_store` schema) |
+| **pgvector** | Embedding index inside PostgreSQL (`rag.document_chunks.embedding`) |
+| **Redis** | ARQ task queue, idempotency key cache (24h TTL), operator notifications |
 
-*Last verified against commit/code state: Checked support_system/root_agent/graph.py, backend/worker.py, and chat routers.*
+## 6. Known Gaps (as of 2026-09-28)
+
+- **Postgres RLS is not enforced**: The app connects as a superuser; multi-tenant isolation is enforced at the application layer (all queries filter by `workspace_id`).
+- **Hybrid search not implemented**: RAG uses dense vector similarity only. BM25 and cross-encoder reranking mentioned in old docs are not present in the code.
+- **One WebSocket per conversation**: `ConnectionManager` stores a single socket per `conversation_id`; a second connection silently replaces the first.
+
+*Last verified against: `backend/main.py`, `backend/api/routers/ws_chat.py`, `backend/services/chat_service.py`, `support_system/root_agent/graph.py`, `support_system/subagents/*/graph.py`*

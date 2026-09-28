@@ -1,45 +1,64 @@
-# Autonomi Support System (Agent-I)
+# Agent-I — Multi-Agent Customer Support System
 
-The Autonomi Support System is a production-bound multi-agent customer support backend. It orchestrates language model agents (via LangGraph) to resolve customer inquiries, retrieve knowledge, and execute authorized actions on external systems, while enforcing safety guardrails and Human-in-the-Loop (HITL) approvals for high-risk operations.
+A production-bound multi-agent customer support backend built with **LangGraph**, **FastAPI**, **PostgreSQL/pgvector**, and **Redis**.
 
-### Quickstart (Bare-metal)
-1. **Clone and Install**
-   ```bash
-   git clone <repository_url>
-   cd Agent-I
-   python -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-   pip install -r requirements.txt
-   ```
-2. **Setup Infrastructure**
-   - Start PostgreSQL (with `pgvector` extension) and Redis.
-3. **Configure Environment**
-   - Create a `.env` file (see `SETUP.md` for all variables).
-   ```bash
-   DATABASE_URL=postgresql+asyncpg://postgres:password@localhost:5432/support_system
-   REDIS_URL=redis://localhost:6379/0
-   ENCRYPTION_KEY=<64_character_hex_string>
-   ```
-4. **Run DB Migrations**
-   ```bash
-   alembic upgrade head
-   ```
-5. **Start Services**
-   - Terminal 1 (API Server): `uvicorn backend.main:app --host 0.0.0.0 --port 8000`
-   - Terminal 2 (Background Worker): `python -m arq backend.worker.WorkerSettings`
+## Documentation
 
-### Prerequisites
-- Python 3.12+
-- PostgreSQL (with `pgvector` enabled)
-- Redis
-- Valid LLM provider API keys (e.g., OpenAI, Anthropic)
+| Document | Description |
+|---|---|
+| [SETUP.md](SETUP.md) | Prerequisites, environment variables, and how to run the system (bare-metal & Docker) |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | System design, agent graph flow, WebSocket streaming, and HITL sequence diagram |
+| [AGENTS.md](AGENTS.md) | Per-agent reference: purpose, I/O contracts, and surprising edge-case behaviors |
+| [API_REFERENCE.md](API_REFERENCE.md) | All REST and WebSocket endpoints grouped by router |
+| [OPERATIONS.md](OPERATIONS.md) | Runbooks for stuck approvals, failed ingestion, HITL management, and DB operations |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Code layout conventions, migration workflow, and safe-change guidance |
+| [FRONTEND.md](FRONTEND.md) | Interaction contract for the external Next.js admin frontend |
 
-### Current Status
-- **Backend**: FastAPI REST endpoints for chat, workspaces, and agents. (WebSockets are not yet implemented).
-- **Agents**: Orchestrator, Action, Retrieval, and Escalation agents are implemented via LangGraph.
-- **Safety**: Guardrails evaluate action risks. High-risk actions trigger HITL (Human-in-the-Loop) pauses via ARQ/LangGraph interrupts.
-- **Frontend**: The Next.js admin frontend lives in a separate repository and communicates via HTTP.
+## System at a Glance
 
-> **Note:** A containerized setup (`docker-compose.yml`) is planned but not currently available. Please use the bare-metal setup instructions.
+```
+Customer / Widget
+      │ HTTP POST or WebSocket
+      ▼
+FastAPI (backend/)
+      │ invokes LangGraph
+      ▼
+root_agent (orchestrator) ──┬── retrieval_agent  (pgvector RAG)
+                            ├── action_agent     (MCP / external tools)
+                            └── escalation_agent (HITL, pauses graph via interrupt())
+                                        │
+                              Redis notification
+                                        │
+                              Human operator approves via API
+                                        │
+                              ARQ worker resumes graph
+```
 
-*Last verified against commit/code state: Checked backend/main.py, support_system/root_agent/graph.py, and backend/core/config.py.*
+## Quick Start
+
+Choose your deployment method:
+
+**Docker (recommended)**
+```bash
+cp .env.example .env   # fill in ENCRYPTION_KEY and any LLM API keys
+docker compose up -d
+docker compose exec api alembic upgrade head
+```
+
+**Bare-metal**
+```bash
+uv pip install -r requirements.txt
+alembic upgrade head
+uvicorn backend.main:app --reload                     # API server
+python -m arq backend.worker.WorkerSettings           # Background worker
+```
+
+See [SETUP.md](SETUP.md) for the full environment variable reference and prerequisites.
+
+## Key Technical Notes
+
+- **Chat transport**: Both HTTP (`POST .../chat`) and WebSocket (`WS .../ws`) are supported. WebSocket streams tokens in real-time.
+- **Idempotency**: The chat and approval endpoints accept an optional `Idempotency-Key` header. Duplicate requests within 24 hours return the cached response and never re-invoke the agent.
+- **HITL**: High-risk actions trigger `escalation_agent`, which calls `interrupt()` to freeze the LangGraph state in Postgres. An operator approves via the API; the ARQ worker resumes the graph.
+- **Multi-tenancy**: All resources are scoped by `workspace_id`. The `WorkspaceContextMiddleware` injects this from the JWT on every request.
+- **Interactive API docs**: Available at `http://localhost:8000/api/v1/docs` when the server is running.
