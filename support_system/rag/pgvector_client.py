@@ -30,6 +30,7 @@
 #   Not called by the Orchestrator or Action Agent directly.
 
 import os
+import json
 from typing import Optional
 
 from langchain_ollama import OllamaEmbeddings
@@ -97,6 +98,102 @@ def similarity_search(
     """
     results = vector_store.similarity_search(query, k=top_k, filter=filter)
     return results
+
+
+def similarity_search_with_score(
+    query: str,
+    top_k: int = 5,
+    filter: Optional[dict] = None,
+) -> list[tuple[Document, float]]:
+    """
+    Retrieve top-k documents and their cosine distance scores.
+    """
+    return vector_store.similarity_search_with_score(query, k=top_k, filter=filter)
+
+
+def keyword_search(
+    query: str,
+    top_k: int = 5,
+    filter: Optional[dict] = None,
+) -> list[Document]:
+    """
+    Retrieve chunks using BM25 / Full-Text Search.
+    """
+    from backend.db.session import get_legacy_sync_pool
+    pool = get_legacy_sync_pool()
+    docs = []
+    
+    with pool.connection() as conn:
+        with conn.cursor(row_factory=dict_row) if hasattr(pool, 'row_factory') else conn.cursor() as cur:
+            from psycopg.rows import dict_row
+            # Ensure we use dict_row if not configured on pool
+            if not hasattr(pool, 'row_factory'):
+                cur.row_factory = dict_row
+
+            where_clauses = ["fts @@ plainto_tsquery('english', %s)"]
+            params = [query]
+            
+            if filter:
+                for k, v in filter.items():
+                    where_clauses.append("metadata @> %s::jsonb")
+                    params.append(json.dumps({k: v}))
+                    
+            where_sql = " AND ".join(where_clauses)
+            
+            sql = f"""
+                SELECT id, doc_id, content, metadata, 
+                       ts_rank_cd(fts, plainto_tsquery('english', %s)) as rank
+                FROM rag.documents
+                WHERE {{where_sql}}
+                ORDER BY rank DESC
+                LIMIT %s
+            """.replace('{where_sql}', where_sql)
+            
+            # The query string appears twice in the SQL (for filtering and ranking)
+            params = [query] + params + [top_k]
+            
+            cur.execute(sql, params)
+            for row in cur.fetchall():
+                meta = row["metadata"] or {}
+                meta["id"] = str(row["id"])
+                meta["document_id"] = row["doc_id"]
+                meta["fts_rank"] = float(row["rank"])
+                docs.append(Document(page_content=row["content"], metadata=meta))
+                
+    return docs
+
+
+def reciprocal_rank_fusion(
+    dense_results: list[tuple[Document, float]],
+    sparse_results: list[Document],
+    k: int = 60
+) -> list[Document]:
+    """
+    Merge dense and sparse results using Reciprocal Rank Fusion (RRF).
+    """
+    scores = {}
+    docs = {}
+    
+    for rank, (doc, _) in enumerate(dense_results):
+        doc_id = doc.metadata.get("id")
+        if doc_id:
+            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank + 1)
+            docs[doc_id] = doc
+            
+    for rank, doc in enumerate(sparse_results):
+        doc_id = doc.metadata.get("id")
+        if doc_id:
+            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank + 1)
+            docs[doc_id] = doc
+            
+    # Sort by RRF score descending
+    sorted_docs = []
+    for doc_id, score in sorted(scores.items(), key=lambda x: x[1], reverse=True):
+        doc = docs[doc_id]
+        doc.metadata["rrf_score"] = score
+        sorted_docs.append(doc)
+        
+    return sorted_docs
 
 
 def delete_document(document_id: str) -> None:

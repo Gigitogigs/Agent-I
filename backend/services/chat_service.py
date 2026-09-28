@@ -161,6 +161,87 @@ async def process_chat_turn(
     }
 
 
+async def process_chat_turn_streaming(
+    db: AsyncSession, 
+    workspace_id: UUID, 
+    conversation_id: UUID, 
+    message: str
+):
+    """
+    Processes a customer chat turn using LangGraph's streaming API to yield tokens in real-time.
+    """
+    turn_count_res = await db.execute(
+        select(ConversationTurn).where(ConversationTurn.conversation_id == conversation_id)
+    )
+    turn_index = len(turn_count_res.scalars().all())
+    
+    user_turn = ConversationTurn(
+        conversation_id=conversation_id,
+        workspace_id=workspace_id,
+        turn_index=turn_index,
+        role="customer",
+        content=message
+    )
+    db.add(user_turn)
+    await db.commit()
+    
+    agent_config_dict = await build_agent_config(db, workspace_id)
+    
+    conv_result = await db.execute(
+        select(Conversation).where(Conversation.id == conversation_id)
+    )
+    conv = conv_result.scalar_one_or_none()
+    customer_id = conv.customer_identifier if conv and conv.customer_identifier else str(conversation_id)
+    
+    state = {
+        "messages": [HumanMessage(content=message)],
+        "session_id": str(conversation_id),
+        "user_id": customer_id
+    }
+    config = {
+        "configurable": {
+            "thread_id": str(conversation_id),
+            "agent_config": agent_config_dict
+        }
+    }
+    
+    assembled_response = []
+    subagent_results = {}
+    
+    # LangGraph astream_events requires version="v2"
+    async for event in root_agent.astream_events(state, config=config, version="v2"):
+        if event["event"] == "on_chat_model_stream":
+            if event.get("metadata", {}).get("langgraph_node") == "synthesise":
+                chunk = event["data"]["chunk"]
+                token = chunk.content
+                if token:
+                    assembled_response.append(token)
+                    yield {"type": "token", "content": token}
+        
+        elif event["event"] == "on_chain_end" and event.get("name") == "synthesise":
+            subagent_results = event["data"]["output"].get("subagent_results", {})
+            
+    final_message = "".join(assembled_response)
+    
+    ai_turn = ConversationTurn(
+        conversation_id=conversation_id,
+        workspace_id=workspace_id,
+        turn_index=turn_index + 1,
+        role="agent",
+        agent_id="orchestrator",
+        content=final_message
+    )
+    db.add(ai_turn)
+    await db.commit()
+    await db.refresh(ai_turn)
+    
+    yield {
+        "type": "turn_complete",
+        "turn_id": str(ai_turn.id),
+        "subagent_results": subagent_results
+    }
+
+
 async def list_conversations(
     db: AsyncSession,
     workspace_id: UUID,

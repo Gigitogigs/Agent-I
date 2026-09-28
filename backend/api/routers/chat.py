@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 from backend.api.dependencies import get_db
 from typing import Optional
 from backend.api.schemas.chat import ChatRequest, ChatResponse, ConversationListResponse, ConversationDetailOut
+from backend.core.arq import get_arq_redis
+import json
 from backend.services.chat_service import process_chat_turn, list_conversations, get_conversation_detail
 from backend.api.dependencies import require_min_role
 from backend.db.models.chat import Conversation
@@ -24,11 +26,25 @@ async def submit_chat_message(
     workspace_id: UUID,
     conversation_id: UUID,
     request: ChatRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key")
 ):
     """
     Submits a customer message to the conversation and invokes the agent graph.
     """
+    redis = await get_arq_redis()
+    cache_key = None
+    if idempotency_key:
+        cache_key = f"idemp:chat:{idempotency_key}"
+        cached = await redis.get(cache_key)
+        if cached:
+            if cached == b"in_progress":
+                raise HTTPException(status_code=409, detail="Request in progress")
+            return json.loads(cached)
+            
+        acquired = await redis.set(cache_key, "in_progress", nx=True, ex=86400)
+        if not acquired:
+            raise HTTPException(status_code=409, detail="Request in progress")
     # 1. Validate conversation exists and belongs to workspace
     conv = await db.get(Conversation, conversation_id)
     if not conv or conv.workspace_id != workspace_id:
@@ -51,12 +67,17 @@ async def submit_chat_message(
             conversation_id=conversation_id,
             message=request.message
         )
-        return ChatResponse(
+        response = ChatResponse(
             response=result["response"],
             turn_id=result["turn_id"],
             subagent_results=result["subagent_results"]
         )
+        if cache_key:
+            await redis.set(cache_key, response.model_dump_json(), ex=86400)
+        return response
     except Exception as e:
+        if cache_key:
+            await redis.delete(cache_key)
         # In production we'd log the full traceback
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

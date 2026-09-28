@@ -3,7 +3,8 @@ import os
 import pytest
 import psycopg
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
+import httpx
 
 from backend.core.config import settings
 from backend.db.base import Base
@@ -128,14 +129,91 @@ async def db_session():
         
     await engine.dispose()
 
+class FakeRedis:
+    def __init__(self):
+        self.data = {}
+        
+    async def get(self, key):
+        return self.data.get(key)
+        
+    async def set(self, key, value, nx=False, ex=None):
+        if nx and key in self.data:
+            return None # redis.set with nx returns None if key exists
+        self.data[key] = value
+        return True
+        
+    async def delete(self, key):
+        if key in self.data:
+            del self.data[key]
+            
+    async def enqueue_job(self, *args, **kwargs):
+        return AsyncMock()
+        
+    async def close(self):
+        pass
+
 @pytest.fixture(autouse=True)
 def mock_arq_redis(monkeypatch):
-    mock_pool = AsyncMock()
-    # It might not be imported if running other tests, so we use try/except
+    mock_pool = FakeRedis()
     try:
-        monkeypatch.setattr("backend.api.routers.knowledge.get_arq_redis", AsyncMock(return_value=mock_pool))
+        monkeypatch.setattr("backend.core.arq.get_arq_redis", AsyncMock(return_value=mock_pool))
     except (ImportError, AttributeError):
         pass
+    return mock_pool
+
+@pytest.fixture
+def mock_llm(monkeypatch):
+    class MockChatModel:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.responses = []
+            
+        def set_responses(self, responses):
+            self.responses = responses
+            
+        async def ainvoke(self, messages, **kwargs):
+            from langchain_core.messages import AIMessage
+            
+            if not self.responses:
+                return AIMessage(content="Mocked LLM response")
+                
+            resp = self.responses.pop(0)
+            if isinstance(resp, Exception):
+                raise resp
+            
+            # If it's a dict, we assume it's tool calls
+            if isinstance(resp, dict):
+                return AIMessage(content="", tool_calls=[resp])
+                
+            return AIMessage(content=str(resp))
+
+    mock_model = MockChatModel()
+    
+    # We monkeypatch the factory function that builds the model
+    # Wait, the factory is in support_system.harness.model_factory.build_model
+    try:
+        monkeypatch.setattr("support_system.harness.model_factory.build_model", lambda cfg: mock_model)
+    except (ImportError, AttributeError):
+        pass
+        
+    return mock_model
+
+@pytest.fixture
+def mock_http(monkeypatch):
+    # Setup a global mock for httpx.AsyncClient to prevent external calls in tests
+    mock_client_instance = AsyncMock()
+    mock_client_instance.get.return_value.status_code = 200
+    mock_client_instance.post.return_value.status_code = 200
+    
+    # Mock the context manager behavior
+    mock_client_instance.__aenter__.return_value = mock_client_instance
+    mock_client_instance.__aexit__.return_value = None
+    
+    # Don't mock the FastAPI test client! Only mock it for specific services if needed.
+    # Actually, it's safer to let tests mock httpx specifically where they need it 
+    # to avoid breaking async_client. But we will provide the fixture.
+    
+    return mock_client_instance
 
 @pytest.fixture
 async def async_client(db_session):

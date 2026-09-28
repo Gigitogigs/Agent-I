@@ -138,3 +138,79 @@ async def test_approve_already_resolved(async_client, db_session):
     
     res = await async_client.post(f"/workspaces/{ws_id}/approvals/{app_req.id}/approve", headers=headers)
     assert res.status_code == 409
+    
+@pytest.mark.asyncio
+async def test_approval_illegal_transition_approved_to_rejected(async_client, db_session):
+    ws_id, conv_id, user_id, token = await setup_test_workspace(db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    app_req = ApprovalRequest(
+        workspace_id=ws_id,
+        conversation_id=conv_id,
+        agent_id="action_agent",
+        action_type="refund",
+        payload={"amount": 50},
+        risk_level="high",
+        status="approved"
+    )
+    db_session.add(app_req)
+    await db_session.commit()
+    await db_session.refresh(app_req)
+    
+    payload = {"reason": "Changed my mind"}
+    res = await async_client.post(f"/workspaces/{ws_id}/approvals/{app_req.id}/reject", json=payload, headers=headers)
+    assert res.status_code == 409
+    
+@pytest.mark.asyncio
+async def test_approval_illegal_transition_rejected_to_approved(async_client, db_session):
+    ws_id, conv_id, user_id, token = await setup_test_workspace(db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    app_req = ApprovalRequest(
+        workspace_id=ws_id,
+        conversation_id=conv_id,
+        agent_id="action_agent",
+        action_type="refund",
+        payload={"amount": 50},
+        risk_level="high",
+        status="rejected"
+    )
+    db_session.add(app_req)
+    await db_session.commit()
+    await db_session.refresh(app_req)
+    
+    res = await async_client.post(f"/workspaces/{ws_id}/approvals/{app_req.id}/approve", headers=headers)
+    assert res.status_code == 409
+
+@pytest.mark.asyncio
+async def test_approval_cross_tenant_isolation(async_client, db_session):
+    # Workspace A with its own approval
+    ws_id_a, conv_id_a, user_id_a, token_a = await setup_test_workspace(db_session, role="operator")
+    
+    app_req_a = ApprovalRequest(
+        workspace_id=ws_id_a,
+        conversation_id=conv_id_a,
+        agent_id="action_agent",
+        action_type="refund",
+        payload={"amount": 50},
+        risk_level="high",
+        status="pending"
+    )
+    db_session.add(app_req_a)
+    await db_session.commit()
+    await db_session.refresh(app_req_a)
+    
+    # Workspace B user tries to approve Workspace A's request
+    ws_id_b, conv_id_b, user_id_b, token_b = await setup_test_workspace(db_session, role="operator")
+    
+    # User B uses their token but targets Workspace A's endpoints
+    headers_b = {"Authorization": f"Bearer {token_b}"}
+    
+    # They should get 403 or 404 depending on how strict the middleware/dependency is.
+    # We expect 404 so we don't leak the existence of the workspace.
+    res_idor = await async_client.post(f"/workspaces/{ws_id_a}/approvals/{app_req_a.id}/approve", headers=headers_b)
+    assert res_idor.status_code in (404, 403)
+    
+    # Verify the DB wasn't updated
+    await db_session.refresh(app_req_a)
+    assert app_req_a.status == "pending"

@@ -32,20 +32,46 @@
 
 ---
 
-## Memory & Privacy Review
+## Documentation & Operational Support Review
 
-An audit of both short-term (conversation) and long-term (customer facts) memory reveals significant cost and privacy concerns. 
+A review of the project documentation from the perspective of a new engineer or a customer's IT team reveals that the system is currently un-deployable and un-supportable without direct help from the original authors.
 
-### 1. Long-Term Memory is "Just a Claim"
-- **The Issue:** The architecture explicitly defines a `load_memory` node in `root_agent/graph.py` which attempts to read customer facts from a persistent LangGraph `BaseStore` using `user_id`. However, **the write side is completely unimplemented**. There are no tools or functions anywhere in the codebase that call `store.put()`.
-- **The Secondary Flaw:** Even the read side is broken. `chat_service.py` never passes `user_id` into the `AgentState` when invoking the graph. Thus, `load_memory` silently fails on every request and always returns an empty dictionary.
-- **Outcome:** Malicious documents cannot poison long-term memory because it doesn't exist, but the promised feature of remembering customer preferences across sessions is entirely vaporware.
+### 1. Zero-to-Working System (The Clone Test)
+- **The Reality:** The `README.md` is completely empty (0 bytes). There is no `.env.example`, no `docker-compose.yml`, and no setup script.
+- **Missing Steps for a New Engineer:**
+  1. How to install and configure PostgreSQL with the `pgvector` extension.
+  2. How to start Redis for the ARQ queue.
+  3. Which environment variables are required (`DATABASE_URL`, `REDIS_URL`, `ENCRYPTION_KEY`, etc.).
+  4. How to run Alembic migrations (and a dire warning that the migrations are currently out of sync with `schema.sql`).
+  5. The specific CLI commands to start the FastAPI server (`uvicorn`) and the ARQ worker (`arq`).
+- **Verdict:** A new engineer or IT person could not get this system running.
 
-### 2. Conversation Checkpoints (Unbounded Cost & Context)
-- **The Issue:** `chat_service.py` delegates conversation memory entirely to LangGraph's `PostgresSaver` via the `thread_id` (conversation ID). Every single turn, tool call, scratchpad thought, and PII string is appended to the checkpoint blob.
-- **Prompt Injection & Cost:** Because there is no message pruning, windowing, or summarization implemented, LangGraph injects the *entire* historical message array into the Orchestrator prompt on every turn. In a long customer support thread, this will result in massive context windows, causing extreme token costs and severely degraded reasoning quality.
+### 2. Stale Claims (Code vs. Docs)
+Several architectural documents contain aspirational claims that differ wildly from the actual codebase:
+- **WebSockets:** `multi-agent-support-system-architecture.md` claims the primary channel is a real-time WebSocket. The code exclusively uses stateless HTTP POSTs (`backend/api/routers/chat.py`).
+- **Data Isolation:** `Backend Architecture.md` claims Postgres RLS guarantees multi-tenant isolation. The code connects as a superuser, bypassing RLS entirely.
+- **Hybrid Retrieval:** Docstrings in the RAG agent claim the system uses "hybrid retrieval, BM25 fallback, and cross-encoder reranking." The code only executes a basic dense vector similarity search.
+- **Long-Term Memory:** The architecture claims to persist long-term customer facts. The codebase has absolutely no functions to write to the `store` memory.
 
-### 3. Data Deletion & Privacy (GDPR/CCPA Non-Compliance)
-- **The Issue:** The system promises privacy, but a customer's data cannot be fully deleted on request. 
-- **The Reality:** While `scheduler.py` has a hard-delete cron job, it *only* triggers if the parent **Workspace** or **User (Agent Operator)** deletes their account. There is no API route, worker task, or database script to delete an individual *Customer's* data from an active workspace.
-- **Outcome:** Customer PII, order numbers, and chat histories are permanently stored in the Postgres `checkpoints` and `conversation_turns` tables, rendering the system non-compliant with standard data deletion requests.
+### 3. Missing Runbooks
+There are absolutely **no runbooks** in the repository. Operators are flying blind for critical incidents:
+- **Stuck Approvals:** No runbook on how to clear them (especially since the database expiry cron doesn't exist).
+- **Failed Ingestion:** No runbook on how to purge zombie documents stuck in the `"processing"` state forever.
+- **Credential Rotation:** No runbook on how to rotate the `ENCRYPTION_KEY` without bricking every stored API key in the database.
+- **Backup & Restore:** No documented strategy for `pg_dump`, point-in-time recovery, or vector index rebuilds.
+- **Connecting New Backends:** No developer guide on how to implement the `AdapterProtocol` for custom clients.
+
+### 4. API and Configuration Documentation
+- **API Spec:** The API is documented manually in `API-Contract.md`. While generally accurate for the happy paths, it is a static markdown file rather than a standard OpenAPI/Swagger spec, meaning SDKs cannot be auto-generated. (FastAPI does auto-generate an OpenAPI spec at `/docs`, but this is not exported or documented in the repo).
+- **Configuration:** Environment variables are entirely undocumented.
+
+### 5. Operator / Customer Expectations
+- **Agent Limits:** There is no user-facing documentation explaining what the agent *won't* do, or what strictly triggers a `HIGH` vs `CRITICAL` risk escalation. Operators have to read the raw Python code to understand the agent's boundaries.
+- **System Limits:** There is no documentation warning customers about file upload size limits (because none are enforced, posing a DoS risk).
+
+### 6. Prioritized Documentation Launch List
+Before launch, the following documents must be written:
+1. **`README.md` (Local Setup Guide):** Step-by-step instructions for DB setup, ENV vars, migrations, and starting the web/worker processes.
+2. **`Runbooks.md` (Incident Management):** Step-by-step guides for DB restore, credential rotation, and clearing stuck queues.
+3. **`Architecture.md` (Refresh):** Strip out all vaporware claims (WebSockets, Hybrid RAG, Long-Term Memory) to reflect the actual v1 codebase.
+4. **`Integrations_Guide.md`:** A developer tutorial on adding a new backend adapter to the MCP layer.

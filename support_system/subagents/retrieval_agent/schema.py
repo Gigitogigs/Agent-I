@@ -48,6 +48,7 @@ class ChunkRef(BaseModel):
     chunk_id: str
     document_id: str
     similarity: float
+    rerank_score: float | None = None
 
 class RetrievalResult(BaseModel):
     answer: str | None = None

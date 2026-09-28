@@ -57,6 +57,9 @@ from support_system.subagents.escalation_agent.graph import invoke_escalation_ag
 
 from .tools.tool_registry import resolve_tools, ALL_TOOLS
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Node: save_memory
@@ -88,8 +91,8 @@ Existing Facts:
 You must return a JSON object with a single key "facts" containing the updated dictionary of facts.
 Do not wrap it in markdown block, just output the raw JSON."""
 
-    # We only need the last few turns (including the final synthesis)
-    messages = [SystemMessage(content=prompt)] + state["messages"][-2:] 
+    # We need the last few turns (including the final synthesis) for context
+    messages = [SystemMessage(content=prompt)] + state["messages"][-10:] 
     try:
         response = llm.invoke(messages)
         content = response.content.strip()
@@ -101,8 +104,11 @@ Do not wrap it in markdown block, just output the raw JSON."""
         new_facts = data.get("facts", existing_facts)
         store.put(namespace, user_id, new_facts)
         return {"customer_context": new_facts}
+    except json.JSONDecodeError as e:
+        logger.error("save_memory: LLM returned malformed JSON, skipping store write. Error: %s", e)
+        return {}
     except Exception as e:
-        print(f"Failed to update memory: {e}")
+        logger.error("save_memory: Unexpected error writing to store for user_id=%s. Error: %s", user_id, e)
         return {}
 
 

@@ -58,6 +58,8 @@ app.include_router(account.router, prefix=settings.API_V1_STR, tags=["account"])
 app.include_router(members.router, prefix=settings.API_V1_STR, tags=["members"])
 app.include_router(approvals.router, prefix=settings.API_V1_STR, tags=["approvals"])
 app.include_router(chat.router, prefix=settings.API_V1_STR, tags=["chat"])
+from backend.api.routers import ws_chat
+app.include_router(ws_chat.router, prefix=settings.API_V1_STR, tags=["chat_ws"])
 app.include_router(agents.router, prefix=settings.API_V1_STR, tags=["agents"])
 app.include_router(knowledge.router, prefix=settings.API_V1_STR, tags=["knowledge"])
 app.include_router(providers.router, prefix=settings.API_V1_STR, tags=["providers"])

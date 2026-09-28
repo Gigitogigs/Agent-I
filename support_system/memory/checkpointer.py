@@ -22,14 +22,8 @@ Usage context:
 
 import psycopg
 from langgraph.checkpoint.postgres import PostgresSaver
-import os
-from dotenv import load_dotenv
-
 from backend.db.session import get_checkpointer_pool
 
-load_dotenv(override=True)
-DB_URL = os.getenv("DB_URL") or ""
-POSTGRES_CHECKPOINTER_SCHEMA = os.getenv("POSTGRES_CHECKPOINTER_SCHEMA", "checkpoints")
 _pool = None
 
 

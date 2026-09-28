@@ -174,13 +174,59 @@ def vector_search_node(state: AgentState, config: RunnableConfig):
     if workspace_id:
         filters["workspace_id"] = str(workspace_id)
 
-    doc_search_results = pgvector_client.similarity_search(
+    # Dense search
+    dense_results = pgvector_client.similarity_search_with_score(
         query=search_string,
         top_k=state.get("top_k", 5),
         filter=filters
     )
     
+    # Sparse search
+    keywords = " ".join(queries.keywords) if queries.keywords else queries.declarative_query
+    sparse_results = pgvector_client.keyword_search(
+        query=keywords,
+        top_k=state.get("top_k", 5),
+        filter=filters
+    )
+    
+    # Merge using RRF
+    doc_search_results = pgvector_client.reciprocal_rank_fusion(dense_results, sparse_results)
+    
     return {"retrieved_docs": doc_search_results}
+
+import asyncio
+from sentence_transformers import CrossEncoder
+
+_cross_encoder = None
+
+def get_cross_encoder():
+    global _cross_encoder
+    if _cross_encoder is None:
+        _cross_encoder = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+    return _cross_encoder
+
+async def rerank_node(state: AgentState, config: RunnableConfig):
+    docs = state.get("retrieved_docs", [])
+    if not docs:
+        return {"retrieved_docs": []}
+        
+    query = state["rewritten_query"].declarative_query
+    pairs = [[query, doc.page_content] for doc in docs]
+    model = get_cross_encoder()
+    
+    try:
+        loop = asyncio.get_running_loop()
+        scores = await loop.run_in_executor(None, model.predict, pairs)
+    except RuntimeError:
+        # Fallback if no event loop is running (e.g. synchronous invoke)
+        scores = model.predict(pairs)
+        
+    for doc, score in zip(docs, scores):
+        doc.metadata["rerank_score"] = float(score)
+        
+    reranked_docs = [doc for doc, _ in sorted(zip(docs, scores), key=lambda x: x[1], reverse=True)]
+    top_k = state.get("top_k", 5)
+    return {"retrieved_docs": reranked_docs[:top_k]}
 
 
 def generate_answer_node(state: AgentState, config: RunnableConfig):
@@ -197,12 +243,25 @@ def generate_answer_node(state: AgentState, config: RunnableConfig):
     Returns:
         dict: A state update containing the 'final_response' and 'source_chunks' used.
     """
+    RERANK_THRESHOLD = 0.3
+    top_score = state["retrieved_docs"][0].metadata.get("rerank_score") if state["retrieved_docs"] else None
+    
+    INSUFFICIENT_PHRASE = "I don't have enough information in the knowledge base to answer this question."
+    
+    if top_score is not None and top_score < RERANK_THRESHOLD:
+        return {"final_response": RetrievalResult(
+            answer=INSUFFICIENT_PHRASE,
+            source_chunks=[],
+            insufficient_coverage=True
+        )}
+
     source_chunks = []
     for doc in state["retrieved_docs"]:
         source_chunks.append(ChunkRef(
             chunk_id=doc.metadata.get("id", "unknown"),
             document_id=doc.metadata.get("document_id", "unknown"),
-            similarity=doc.metadata.get("similarity", 0.0)
+            similarity=doc.metadata.get("similarity", 0.0),
+            rerank_score=doc.metadata.get("rerank_score")
         ))
 
     docs_text = "\n\n".join([doc.page_content for doc in state["retrieved_docs"]])
@@ -283,11 +342,13 @@ def generate_answer_node(state: AgentState, config: RunnableConfig):
 builder = StateGraph(AgentState)
 builder.add_node("rewrite_query", rewrite_query_node)
 builder.add_node("vector_search", vector_search_node)
+builder.add_node("rerank", rerank_node)
 builder.add_node("generate_answer", generate_answer_node)
 
 builder.add_edge(START, "rewrite_query")
 builder.add_edge("rewrite_query", "vector_search")
-builder.add_edge("vector_search", "generate_answer")
+builder.add_edge("vector_search", "rerank")
+builder.add_edge("rerank", "generate_answer")
 builder.add_edge("generate_answer", END)
 
 retrieval_agent = builder.compile()

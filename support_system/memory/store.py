@@ -31,12 +31,7 @@ import psycopg
 import psycopg_pool
 from psycopg.rows import dict_row
 from langgraph.store.postgres import PostgresStore
-import os
 from backend.db.session import get_store_pool
-from dotenv import load_dotenv
-
-load_dotenv(override=True)
-DB_URL = os.getenv("DB_URL") or ""
 
 def get_store():
     pool = get_store_pool()
