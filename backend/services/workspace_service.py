@@ -57,6 +57,30 @@ async def create_workspace(db: AsyncSession, name: str, user: User) -> dict:
         "deletion_scheduled_at": workspace.deletion_scheduled_at
     }
 
+async def ensure_default_workspace(db: AsyncSession, user: User) -> WorkspaceMember:
+    """Create a default workspace for a user if they have none, and return the membership."""
+    workspace = Workspace(name=f"{user.full_name}'s Workspace")
+    db.add(workspace)
+    await db.flush()
+    
+    member = WorkspaceMember(
+        workspace_id=workspace.id,
+        user_id=user.id,
+        role="owner",
+        status="active"
+    )
+    db.add(member)
+    await db.commit()
+    
+    # Reload with workspace eager loaded to match existing expectations
+    stmt = (
+        select(WorkspaceMember)
+        .where(WorkspaceMember.id == member.id)
+        .options(selectinload(WorkspaceMember.workspace))
+    )
+    member_reloaded = await db.scalar(stmt)
+    return member_reloaded
+
 async def schedule_workspace_deletion(db: AsyncSession, workspace_id: UUID, user: User, password: str) -> None:
     """Soft delete a workspace. Owner only (enforced at router level)."""
     if not verify_password(password, user.password_hash):

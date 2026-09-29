@@ -55,11 +55,11 @@ def _set_refresh_cookie(response: Response, raw_refresh: str) -> None:
         secure=True,          # HTTPS only in production; override with env var for dev
         samesite="lax",
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
-        path="/api/v1/auth",  # Scoped: cookie is only sent to the auth routes
+        path="/",             # Allow Next.js middleware to see this cookie on all routes
     )
 
 def _clear_refresh_cookie(response: Response) -> None:
-    response.delete_cookie(key=REFRESH_COOKIE_NAME, path="/api/v1/auth")
+    response.delete_cookie(key=REFRESH_COOKIE_NAME, path="/")
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +111,11 @@ async def login(
     )
     res = await db.execute(stmt)
     memberships = res.scalars().all()
+    
+    if not memberships:
+        from backend.services.workspace_service import ensure_default_workspace
+        new_member = await ensure_default_workspace(db, user)
+        memberships = [new_member]
     
     active_workspace_id = None
     workspace_deletion_status = None
