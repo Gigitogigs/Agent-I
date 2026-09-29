@@ -68,6 +68,8 @@ async def update_agent_config(db: AsyncSession, workspace_id: UUID, agent_type: 
             setattr(config, col_name, dict(col))
 
     if agent_type == "global":
+        if update_data.provider is not None:
+            config.active_provider = update_data.provider
         if update_data.model is not None:
             config.global_model = update_data.model
         if update_data.systemPrompt is not None:

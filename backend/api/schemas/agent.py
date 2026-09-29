@@ -29,6 +29,7 @@ class AgentConfigOut(BaseModel):
         populate_by_name = True
 
 class AgentConfigUpdate(BaseModel):
+    provider: Optional[str] = None
     model: Optional[str] = None
     fallbackModel: Optional[str] = None
     systemPrompt: Optional[str] = None
