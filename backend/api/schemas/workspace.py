@@ -22,6 +22,9 @@ class WorkspaceOut(BaseModel):
 class WorkspaceCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
 
+class WorkspaceUpdate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+
 class PasswordConfirmBody(BaseModel):
     """Used for high-risk actions like deleting an account or workspace."""
     password: str

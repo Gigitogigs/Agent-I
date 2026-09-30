@@ -5,12 +5,13 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.dependencies import get_current_user, get_db, require_role
-from backend.api.schemas.workspace import WorkspaceCreate, WorkspaceOut, PasswordConfirmBody
+from backend.api.schemas.workspace import WorkspaceCreate, WorkspaceOut, PasswordConfirmBody, WorkspaceUpdate
 from backend.api.schemas.auth import MessageResponse
 from backend.db.models.user import User
 from backend.services.workspace_service import (
     get_user_workspaces,
     create_workspace,
+    rename_workspace,
     schedule_workspace_deletion,
     cancel_workspace_deletion,
 )
@@ -33,6 +34,16 @@ async def new_workspace(
     current_user: User = Depends(get_current_user)
 ):
     return await create_workspace(db, name=body.name, user=current_user)
+
+@router.patch("/{workspace_id}", response_model=WorkspaceOut)
+async def update_workspace(
+    workspace_id: UUID,
+    body: WorkspaceUpdate,
+    db: AsyncSession = Depends(get_db),
+    _membership = Depends(require_role("owner"))
+):
+    """Rename a workspace. Only owners can perform this action."""
+    return await rename_workspace(db, workspace_id, body.name)
 
 @router.delete("/{workspace_id}", status_code=status.HTTP_202_ACCEPTED)
 async def delete_workspace(

@@ -57,6 +57,23 @@ async def create_workspace(db: AsyncSession, name: str, user: User) -> dict:
         "deletion_scheduled_at": workspace.deletion_scheduled_at
     }
 
+async def rename_workspace(db: AsyncSession, workspace_id: UUID, new_name: str) -> dict:
+    """Rename an existing workspace and return the updated details."""
+    workspace = await db.scalar(select(Workspace).where(Workspace.id == workspace_id))
+    if not workspace:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found.")
+        
+    workspace.name = new_name
+    await db.commit()
+    await db.refresh(workspace)
+    
+    return {
+        "id": workspace.id,
+        "name": workspace.name,
+        "role": "owner",
+        "deletion_scheduled_at": workspace.deletion_scheduled_at
+    }
+
 async def ensure_default_workspace(db: AsyncSession, user: User) -> WorkspaceMember:
     """Create a default workspace for a user if they have none, and return the membership."""
     workspace = Workspace(name=f"{user.full_name}'s Workspace")
