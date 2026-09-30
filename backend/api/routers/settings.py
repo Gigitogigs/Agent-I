@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.dependencies import get_current_user, get_db, require_role
+from backend.api.dependencies import get_current_user, get_db, require_role, require_min_role
 from backend.api.schemas.auth import MessageResponse
 from backend.api.schemas.settings import (
     NotificationChannelOut,
