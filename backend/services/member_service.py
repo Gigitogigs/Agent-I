@@ -35,6 +35,7 @@ async def get_workspace_members(db: AsyncSession, workspace_id: UUID) -> List[di
             "id": m.user_id if m.status == "active" else None,
             "name": name if m.status == "active" else None,
             "email": email,
+            "avatar_url": m.user.avatar_url if m.user and m.status == "active" else None,
             "role": m.role,
             "status": m.status,
             "last_active_at": m.user.updated_at if m.user and m.status == "active" else None
@@ -93,6 +94,7 @@ async def invite_member(db: AsyncSession, workspace_id: UUID, email: str, role: 
         "id": None,
         "name": None,
         "email": email,
+        "avatar_url": None,
         "role": role,
         "status": "pending",
         "last_active_at": None

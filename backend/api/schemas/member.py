@@ -15,6 +15,7 @@ class MemberOut(BaseModel):
     id: Optional[UUID] = None
     name: Optional[str] = None
     email: EmailStr
+    avatar_url: Optional[str] = None
     role: str
     status: str
     last_active_at: Optional[datetime] = None
@@ -23,6 +24,7 @@ class MemberOut(BaseModel):
 
 class MemberInvite(BaseModel):
     email: EmailStr
+    avatar_url: Optional[str] = None
     role: str = Field(..., pattern="^(admin|operator|read-only)$")
 
 class MemberUpdate(BaseModel):
