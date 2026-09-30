@@ -1,5 +1,5 @@
 from uuid import UUID
-from typing import Optional
+from typing import Optional, Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
@@ -69,7 +69,7 @@ async def update_agent_config(db: AsyncSession, workspace_id: UUID, agent_type: 
 
     if agent_type == "global":
         if update_data.provider is not None:
-            config.active_provider = update_data.provider
+            config.active_provider = update_data.provider.value if hasattr(update_data.provider, 'value') else update_data.provider
         if update_data.model is not None:
             config.global_model = update_data.model
         if update_data.systemPrompt is not None:

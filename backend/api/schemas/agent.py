@@ -1,5 +1,17 @@
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
+from enum import Enum
+
+class AIProvider(str, Enum):
+    OLLAMA = "ollama"
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
+    GOOGLE_GENAI = "google-genai"
+    HUGGINGFACE = "huggingface"
+    NVIDIA = "nvidia"
+    AWS = "aws"
+    GROQ = "groq"
+    DEEPSEEK = "deepseek"
 
 class HitlBreakpoint(BaseModel):
     id: str
@@ -9,7 +21,7 @@ class HitlBreakpoint(BaseModel):
 
 class AgentDetail(BaseModel):
     id: str
-    provider: Optional[str] = None
+    provider: Optional[AIProvider] = None
     model: Optional[str] = None
     fallbackModel: Optional[str] = None
     systemPrompt: Optional[str] = None
@@ -29,7 +41,7 @@ class AgentConfigOut(BaseModel):
         populate_by_name = True
 
 class AgentConfigUpdate(BaseModel):
-    provider: Optional[str] = None
+    provider: Optional[AIProvider] = None
     model: Optional[str] = None
     fallbackModel: Optional[str] = None
     systemPrompt: Optional[str] = None
@@ -39,7 +51,7 @@ class AgentConfigUpdate(BaseModel):
 
 class ApiKeyUpdate(BaseModel):
     apiKey: str
-    provider: str
+    provider: AIProvider
 
 class ApiKeyResponse(BaseModel):
     apiKeyHint: str

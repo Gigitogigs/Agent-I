@@ -61,6 +61,7 @@ PROVIDERS = {
     "nvidia": ChatNVIDIA,
     "aws": ChatBedrock,
     "groq": ChatGroq,
+    "deepseek": ChatOpenAI,
 }
 
 def load_config(path: str = "./subagent_registry.yaml") -> dict:
@@ -109,6 +110,9 @@ def build_model(agent_config: dict):
     api_key = agent_config.get("api_key")
     if api_key:
         kwargs["api_key"] = api_key
+        
+    if provider == "deepseek":
+        kwargs["base_url"] = "https://api.deepseek.com"
 
     return model_class(**kwargs)
 

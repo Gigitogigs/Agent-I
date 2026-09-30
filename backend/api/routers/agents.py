@@ -18,6 +18,14 @@ async def get_agents(
 ):
     return await get_agent_config(db, workspace_id)
 
+@router.get("/providers", response_model=list[str])
+async def get_providers(
+    workspace_id: UUID,
+    _membership = Depends(require_min_role("read-only"))
+):
+    from backend.api.schemas.agent import AIProvider
+    return [p.value for p in AIProvider]
+
 @router.patch("/{agent_type}", response_model=AgentConfigOut)
 async def update_agent(
     workspace_id: UUID,
