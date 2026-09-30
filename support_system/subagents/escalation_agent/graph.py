@@ -155,18 +155,23 @@ def notify_operator(state: AgentState, config: RunnableConfig):
     """
     hitl_checkpoint_id = state["hitl_checkpoint_id"]
     conversation_id = state["escalation_request"].conversation_id
+    workspace_id = state["escalation_request"].workspace_id
 
-    notification = {
-        "type": "hitl_notification",
-        "checkpoint_id": hitl_checkpoint_id,
-        "conversation_id": conversation_id,
-        "risk_level": state["escalation_request"].risk_level,
+    queue_msg = {
+        "workspace_id": str(workspace_id),
+        "event_type": "escalation",
+        "payload": {
+            "session_id": conversation_id,
+            "risk_level": state["escalation_request"].risk_level,
+            "checkpoint_id": hitl_checkpoint_id,
+            "message": "HITL required",
+        },
     }
 
-    notification_json = json.dumps(notification).encode("utf-8")
+    notification_json = json.dumps(queue_msg).encode("utf-8")
 
     try:
-        push_to_redis_with_retry("operator_notifications", notification_json)
+        push_to_redis_with_retry("notifications_queue", notification_json)
     except Exception as e:
         print(f"CRITICAL ERROR: Failed to notify operator after retries. {e}")
 
@@ -241,7 +246,12 @@ builder.add_edge("notify_operator", "await_decision")
 builder.add_edge("await_decision", "apply_decision")
 builder.add_edge("apply_decision", END)
 
-escalation_agent = builder.compile(checkpointer=get_checkpointer())
+_escalation_agent = None
+def get_escalation_agent():
+    global _escalation_agent
+    if _escalation_agent is None:
+        _escalation_agent = builder.compile(checkpointer=get_checkpointer())
+    return _escalation_agent
 
 @tool(name_or_callable="escalation_agent")
 def invoke_escalation_agent(request: EscalationRequest, config: RunnableConfig) -> EscalationResults:
@@ -280,6 +290,7 @@ def invoke_escalation_agent(request: EscalationRequest, config: RunnableConfig) 
     child_config["configurable"]["thread_id"] = request.conversation_id
     child_config["configurable"]["checkpoint_ns"] = "escalation_agent"
     
-    result_state = escalation_agent.invoke(initial_state, config=child_config)
+    agent = get_escalation_agent()
+    result_state = agent.invoke(initial_state, config=child_config)
     
     return result_state["escalation_results"]

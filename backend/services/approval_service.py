@@ -17,10 +17,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 from backend.core.arq import get_arq_redis
 try:
     from langgraph.types import Command
-    from support_system.subagents.escalation_agent.graph import escalation_agent
 except ImportError as e:
-    escalation_agent = None
-    print(f"WARNING: escalation_agent could not be imported. Approvals will update the DB but graph resume will fail. Error: {e}")
+    print(f"WARNING: langgraph could not be imported.")
 
 async def list_approvals(db: AsyncSession, workspace_id: UUID, status_filter: Optional[str] = None) -> List[dict]:
     """Return all approval requests for a workspace, optionally filtered by status."""

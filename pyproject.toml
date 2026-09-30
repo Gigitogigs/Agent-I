@@ -135,7 +135,7 @@ extraPaths = ["support_system"]
 [tool.pytest.ini_options]
 pythonpath = ["support_system"]
 asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope = "session"
+asyncio_default_fixture_loop_scope = "function"
 
 [build-system]
 requires = ["hatchling"]

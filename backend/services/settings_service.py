@@ -20,6 +20,16 @@ import json
 # Notifications
 # ---------------------------------------------------------------------------
 
+def _encrypt_cfg(cfg: dict) -> dict:
+    """Encrypts the whole config dict as a single JSON string."""
+    import json
+    return {"encrypted_payload": encrypt_secret(json.dumps(cfg))}
+
+def _decrypt_cfg(channel) -> dict:
+    """Decrypts the channel config and returns a plain Python dict."""
+    import json
+    return json.loads(decrypt_secret(channel.config["encrypted_payload"]))
+
 async def get_notification_channels(db: AsyncSession, workspace_id: UUID) -> List[dict]:
     stmt = select(WorkspaceNotificationChannel).where(WorkspaceNotificationChannel.workspace_id == workspace_id)
     result = await db.execute(stmt)
@@ -43,7 +53,6 @@ async def get_notification_channels(db: AsyncSession, workspace_id: UUID) -> Lis
             "workspace_id": c.workspace_id,
             "channel_type": c.channel_type,
             "name": c.name,
-            "config": c.config,
             "is_active": c.is_active,
             "created_at": c.created_at,
             "on_escalation": on_escalation,
@@ -56,7 +65,7 @@ async def create_notification_channel(db: AsyncSession, workspace_id: UUID, data
         workspace_id=workspace_id,
         channel_type=data["channel_type"],
         name=data["name"],
-        config=data["config"],
+        config=_encrypt_cfg(data["config"]),
         is_active=data.get("is_active", True)
     )
     db.add(channel)
@@ -82,7 +91,6 @@ async def create_notification_channel(db: AsyncSession, workspace_id: UUID, data
         "workspace_id": channel.workspace_id,
         "channel_type": channel.channel_type,
         "name": channel.name,
-        "config": channel.config,
         "is_active": channel.is_active,
         "created_at": channel.created_at,
         "on_escalation": s1.is_enabled,
@@ -100,7 +108,7 @@ async def update_notification_channel(db: AsyncSession, workspace_id: UUID, chan
     if "name" in data and data["name"] is not None:
         channel.name = data["name"]
     if "config" in data and data["config"] is not None:
-        channel.config = data["config"]
+        channel.config = _encrypt_cfg(data["config"])
     if "is_active" in data and data["is_active"] is not None:
         channel.is_active = data["is_active"]
         
@@ -127,7 +135,6 @@ async def update_notification_channel(db: AsyncSession, workspace_id: UUID, chan
         "workspace_id": channel.workspace_id,
         "channel_type": channel.channel_type,
         "name": channel.name,
-        "config": channel.config,
         "is_active": channel.is_active,
         "created_at": channel.created_at,
         "on_escalation": on_escalation.is_enabled if on_escalation else False,

@@ -86,7 +86,13 @@ async def test_notification_channel(
     from backend.services.settings_service import _decrypt_cfg
     from backend.services.notification_dispatcher import PROVIDERS, ProviderEnum
     cfg = _decrypt_cfg(channel)
-    PROVIDERS[ProviderEnum(channel.channel_type)](cfg, {"workspace_id": str(workspace_id), **test_payload})
+    try:
+        PROVIDERS[ProviderEnum(channel.channel_type)](cfg, {"workspace_id": str(workspace_id), **test_payload})
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to send test notification: {exc}"
+        )
     return MessageResponse(message="Test notification sent successfully.")
 
 # ---------------------------------------------------------------------------

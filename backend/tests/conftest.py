@@ -113,21 +113,21 @@ def setup_database():
     
     teardown_test_db()
 
+from sqlalchemy.pool import NullPool
+
+test_engine = create_async_engine(test_db_url, echo=False, poolclass=NullPool)
+TestingSessionLocal = async_sessionmaker(
+    bind=test_engine,
+    autocommit=False,
+    autoflush=False,
+    expire_on_commit=False
+)
+
 @pytest.fixture
 async def db_session():
-    engine = create_async_engine(test_db_url, echo=False, pool_size=5, max_overflow=5)
-    TestingSessionLocal = async_sessionmaker(
-        bind=engine,
-        autocommit=False,
-        autoflush=False,
-        expire_on_commit=False
-    )
-    
     async with TestingSessionLocal() as session:
         yield session
-        await session.rollback() 
-        
-    await engine.dispose()
+        await session.rollback()
 
 class FakeRedis:
     def __init__(self):
@@ -221,7 +221,6 @@ async def async_client(db_session):
     from backend.api.dependencies import get_db
     from httpx import AsyncClient, ASGITransport
     
-    # Override get_db to return the current test transaction
     async def override_get_db():
         yield db_session
         
