@@ -6,39 +6,33 @@ Exposes three MCP tools for querying and managing product inventory:
 - :func:`reserve_stock` — hold units to prevent overselling.
 - :func:`update_stock_count` — overwrite the stock count with a new absolute value.
 
-The concrete backend adapter (Shopify or in-house) is selected at startup via
-the ``ADAPTER_TYPE`` environment variable (default: ``"inhouse"``).
+The concrete backend adapter (Shopify or in-house) is selected dynamically via
+the ``CONNECTOR_CONFIG`` environment variable payload.
 """
 import os
 import json
 from mcp.server.fastmcp import FastMCP as MCPServer
-import sys
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from shared.shopify_client import SharedShopifyClient
-from adapters.shopify_adapter import ShopifyAdapter
-from adapters.inhouse_adapter import InHouseAdapter
-from adapters.base import AdapterProtocol
+from support_system.mcp_servers.inventory_mcp.adapters.base import AdapterProtocol
 
 mcp = MCPServer("inventory-mcp")
 
 # --- Adapter Selection ---
-ADAPTER_TYPE = os.getenv("ADAPTER_TYPE", "inhouse")
+import sys
+import os
 
-adapter: AdapterProtocol
+# Add root directory to sys.path so we can import shared and support_system modules
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..')))
 
-if ADAPTER_TYPE == "shopify":
-    shopify_client = SharedShopifyClient(
-        shop_url=os.getenv("SHOPIFY_SHOP_URL", ""),
-        access_token=os.getenv("SHOPIFY_ACCESS_TOKEN", "")
-    )
-    adapter = ShopifyAdapter(client=shopify_client)
+import json
+from support_system.mcp_servers.shared.adapter_registry import build_adapter
+
+_raw = os.getenv("CONNECTOR_CONFIG")
+if _raw:
+    _cfg = json.loads(_raw)
+    adapter = build_adapter(_cfg["adapter_key"], _cfg["config"])
 else:
-    # Notice we don't use a shared inhouse client here yet per the instructions
-    adapter = InHouseAdapter(
-        api_base_url=os.getenv("INHOUSE_API_BASE_URL", ""),
-        api_key=os.getenv("INHOUSE_API_KEY", "")
-    )
+    # Local dev / standalone fallback
+    adapter = build_adapter("inhouse", {"api_base_url": os.getenv("INHOUSE_API_BASE_URL",""), "api_key": os.getenv("INHOUSE_API_KEY","")})
 
 # --- MCP Tool Exposures ---
 @mcp.tool()

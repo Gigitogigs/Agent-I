@@ -188,6 +188,8 @@ async def get_integrations(db: AsyncSession, workspace_id: UUID) -> List[dict]:
             "workspace_id": i.workspace_id,
             "integration_type": i.integration_type,
             "name": i.name,
+            "domain": i.domain,
+            "is_primary": i.is_primary,
             "status": i.status,
             "last_checked_at": i.last_checked_at,
             "created_at": i.created_at
@@ -195,6 +197,21 @@ async def get_integrations(db: AsyncSession, workspace_id: UUID) -> List[dict]:
     ]
 
 async def create_integration(db: AsyncSession, workspace_id: UUID, data: dict) -> dict:
+    from backend.core.connectors import CONNECTOR_CATALOG
+    entry = CONNECTOR_CATALOG.get(data["integration_type"])
+    domain = entry["domains"][0] if entry and entry.get("domains") else None
+
+    if domain:
+        # Flip existing to non-primary
+        existing_stmt = select(WorkspaceIntegration).where(
+            WorkspaceIntegration.workspace_id == workspace_id,
+            WorkspaceIntegration.domain == domain,
+            WorkspaceIntegration.is_primary == True
+        )
+        existing_res = await db.execute(existing_stmt)
+        for old in existing_res.scalars().all():
+            old.is_primary = False
+
     # Encrypt the config object as a JSON string
     config_str = json.dumps(data["config"])
     encrypted_config = encrypt_secret(config_str)
@@ -203,6 +220,8 @@ async def create_integration(db: AsyncSession, workspace_id: UUID, data: dict) -
         workspace_id=workspace_id,
         integration_type=data["integration_type"],
         name=data["name"],
+        domain=domain,
+        is_primary=True,
         config={"encrypted_payload": encrypted_config}, # store it under a key
         status="pending"
     )
@@ -215,6 +234,8 @@ async def create_integration(db: AsyncSession, workspace_id: UUID, data: dict) -
         "workspace_id": integration.workspace_id,
         "integration_type": integration.integration_type,
         "name": integration.name,
+        "domain": integration.domain,
+        "is_primary": integration.is_primary,
         "status": integration.status,
         "last_checked_at": integration.last_checked_at,
         "created_at": integration.created_at
@@ -251,37 +272,22 @@ async def verify_integration(db: AsyncSession, workspace_id: UUID, integration_i
         raise HTTPException(status_code=400, detail="Failed to decrypt integration credentials")
         
     itype = integration.integration_type.lower()
-    success = False
     
-    async with httpx.AsyncClient() as client:
-        try:
-            if itype == "shopify":
-                # Expecting 'store_url' and 'access_token' in config
-                store_url = config_dict.get("store_url", "").rstrip("/")
-                token = config_dict.get("access_token", "")
-                resp = await client.get(
-                    f"{store_url}/admin/api/2024-01/shop.json",
-                    headers={"X-Shopify-Access-Token": token},
-                    timeout=10.0
-                )
-                success = (resp.status_code == 200)
-            elif itype == "zendesk":
-                # Expecting 'subdomain', 'email', 'api_token'
-                sub = config_dict.get("subdomain", "")
-                email = config_dict.get("email", "")
-                token = config_dict.get("api_token", "")
-                auth = (f"{email}/token", token)
-                resp = await client.get(
-                    f"https://{sub}.zendesk.com/api/v2/users/me.json",
-                    auth=auth,
-                    timeout=10.0
-                )
-                success = (resp.status_code == 200)
-            else:
-                # Custom MCP server - just mark active since we can't easily verify HTTP here unless it exposes a health check
-                success = True
-        except Exception:
-            success = False
+    from backend.core.connectors import CONNECTOR_CATALOG
+    if itype not in CONNECTOR_CATALOG:
+        raise HTTPException(status_code=400, detail="Unknown integration type")
+        
+    from backend.services.connector_verifiers import VERIFIERS
+    verifier = VERIFIERS.get(itype)
+    
+    if verifier is None:
+        success = True  # inhouse / unknown-but-registered types with no external check
+    else:
+        async with httpx.AsyncClient() as client:
+            try:
+                success = await verifier(config_dict, client)
+            except Exception:
+                success = False
             
     if success:
         integration.status = "active"

@@ -114,12 +114,19 @@ def execute_tool(state: AgentState, config: RunnableConfig) -> dict:
     server_dir = agent_config.get("mcp_server", "order_account_mcp")
     server_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'mcp_servers', server_dir, 'server.py'))
     
+    connector = agent_config.get("connector")
+    
     # Inject idempotency_key for mutating operations
     if req.action_type in ["issue_refund", "cancel_order", "update_shipping_address", "reserve_stock", "update_stock_count"]:
         req.params["idempotency_key"] = idempotency_key
 
     try:
-        client = MCPToolClient(server_path=server_path)
+        if connector and connector.get("transport") == "remote_mcp":
+            client = MCPToolClient(server_url=connector["config"]["server_url"], auth_token=connector["config"].get("auth_token"))
+        else:
+            extra_env = {"CONNECTOR_CONFIG": json.dumps(connector)} if connector else None
+            client = MCPToolClient(server_path=server_path, extra_env=extra_env)
+            
         mcp_result = client.call(req.action_type, req.params)
     except Exception as e:
         try:

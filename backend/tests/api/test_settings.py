@@ -114,3 +114,84 @@ async def test_verify_integration_shopify(async_client, db_session, monkeypatch)
     list_res = await async_client.get(f"/workspaces/{ws_id}/settings/integrations", headers=headers)
     integration = next(i for i in list_res.json() if i["id"] == int_id)
     assert integration["status"] == "active"
+
+@pytest.mark.asyncio
+async def test_invalid_integration_type(async_client, db_session):
+    ws_id, token = await setup_test_workspace(db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    payload = {
+        "integration_type": "not_a_real_type",
+        "name": "Invalid",
+        "config": {"foo": "bar"}
+    }
+    create_res = await async_client.post(f"/workspaces/{ws_id}/settings/integrations", json=payload, headers=headers)
+    assert create_res.status_code == 422
+
+@pytest.mark.asyncio
+async def test_connector_catalog_route(async_client, db_session):
+    ws_id, token = await setup_test_workspace(db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Add a mock shopify integration
+    payload = {
+        "integration_type": "shopify",
+        "name": "My Store",
+        "config": {"store_url": "https://mystore.myshopify.com", "access_token": "shpat_123"}
+    }
+    await async_client.post(f"/workspaces/{ws_id}/settings/integrations", json=payload, headers=headers)
+
+    res = await async_client.get(f"/workspaces/{ws_id}/settings/connector-catalog", headers=headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert len(data) >= 4  # shopify, inhouse, zendesk, custom_mcp
+
+    shopify = next(item for item in data if item["id"] == "shopify")
+    assert shopify["is_configured"] is True
+    assert shopify["integration_id"] is not None
+    assert shopify["status"] == "pending"
+    assert "order_account" in shopify["domains"]
+    
+    zendesk = next(item for item in data if item["id"] == "zendesk")
+    assert zendesk["is_configured"] is False
+    assert zendesk["integration_id"] is None
+
+@pytest.mark.asyncio
+async def test_is_primary_behavior(async_client, db_session):
+    ws_id, token = await setup_test_workspace(db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    payload1 = {
+        "integration_type": "shopify",
+        "name": "My Store 1",
+        "config": {"store_url": "https://store1.myshopify.com", "access_token": "shpat_123"}
+    }
+    res1 = await async_client.post(f"/workspaces/{ws_id}/settings/integrations", json=payload1, headers=headers)
+    assert res1.status_code == 201
+    id1 = res1.json()["id"]
+
+    # First one is primary
+    list_res = await async_client.get(f"/workspaces/{ws_id}/settings/integrations", headers=headers)
+    int1 = next(i for i in list_res.json() if i["id"] == id1)
+    assert int1["is_primary"] is True
+    assert int1["domain"] == "order_account"
+
+    # Add second with same domain
+    payload2 = {
+        "integration_type": "shopify",
+        "name": "My Store 2",
+        "config": {"store_url": "https://store2.myshopify.com", "access_token": "shpat_456"}
+    }
+    res2 = await async_client.post(f"/workspaces/{ws_id}/settings/integrations", json=payload2, headers=headers)
+    assert res2.status_code == 201
+    id2 = res2.json()["id"]
+
+    # Second one is primary, first is not
+    list_res = await async_client.get(f"/workspaces/{ws_id}/settings/integrations", headers=headers)
+    
+    # In list_res, check
+    int1 = next(i for i in list_res.json() if i["id"] == id1)
+    int2 = next(i for i in list_res.json() if i["id"] == id2)
+    
+    assert int1["is_primary"] is False
+    assert int2["is_primary"] is True

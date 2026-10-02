@@ -83,11 +83,24 @@ class IntegrationCreate(BaseModel):
     name: str = Field(..., description="Display name")
     config: Dict[str, Any] = Field(..., description="Credentials (e.g. {'api_key': '...'})")
 
+    @model_validator(mode='after')
+    def validate_type_and_config(self):
+        from backend.core.connectors import CONNECTOR_CATALOG
+        entry = CONNECTOR_CATALOG.get(self.integration_type)
+        if not entry:
+            raise ValueError(f"Unknown integration_type '{self.integration_type}'")
+        missing = [k for k, f in entry["config_schema"].items() if f["required"] and k not in self.config]
+        if missing:
+            raise ValueError(f"{self.integration_type} config missing keys: {missing}")
+        return self
+
 class IntegrationOut(BaseModel):
     id: UUID
     workspace_id: UUID
     integration_type: str
     name: str
+    domain: Optional[str] = None
+    is_primary: bool = False
     status: str
     last_checked_at: Optional[datetime]
     created_at: datetime

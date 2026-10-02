@@ -36,6 +36,8 @@ class WorkspaceIntegration(Base):
     workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
     integration_type = Column(String, nullable=False)
     name = Column(String, nullable=False)
+    domain = Column(String, nullable=True)
+    is_primary = Column(Boolean, nullable=False, default=False)
     config = Column(JSONB, nullable=False)
     status = Column(String, nullable=False, default="active")
     last_checked_at = Column(DateTime(timezone=True), nullable=True)

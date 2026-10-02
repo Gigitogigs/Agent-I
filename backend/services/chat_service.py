@@ -9,7 +9,28 @@ from langchain_core.messages import HumanMessage
 
 from backend.db.models.chat import Conversation, ConversationTurn
 from backend.db.models.agent_config import WorkspaceAgentConfig, WorkspaceProviderKey
-from support_system.root_agent.graph import root_agent
+from backend.db.models.settings import WorkspaceIntegration
+from backend.core.security import decrypt_secret
+from backend.core.connectors import CONNECTOR_CATALOG
+from support_system.root_agent.graph import get_root_agent
+
+async def _get_active_connector(db: AsyncSession, workspace_id: UUID, domain: str) -> Optional[dict]:
+    integrations = (await db.execute(
+        select(WorkspaceIntegration).where(
+            WorkspaceIntegration.workspace_id == workspace_id,
+            WorkspaceIntegration.status == "active",
+            WorkspaceIntegration.is_primary == True,
+        )
+    )).scalars().all()
+    for integ in integrations:
+        entry = CONNECTOR_CATALOG.get(integ.integration_type)
+        if entry and domain in entry["domains"] and entry.get("adapter_key") is not None:
+            cfg = json.loads(decrypt_secret(integ.config["encrypted_payload"]))
+            return {"adapter_key": entry["adapter_key"], "config": cfg, "transport": entry.get("transport", "builtin")}
+        elif entry and domain in entry["domains"] and entry.get("transport") == "remote_mcp":
+            cfg = json.loads(decrypt_secret(integ.config["encrypted_payload"]))
+            return {"adapter_key": None, "config": cfg, "transport": "remote_mcp"}
+    return None
 
 async def build_agent_config(db: AsyncSession, workspace_id: UUID) -> dict:
     """
@@ -78,6 +99,8 @@ async def build_agent_config(db: AsyncSession, workspace_id: UUID) -> dict:
                      agent_config["orchestrator"]["model"] = model_name
                  elif agent in agent_config["subagents"]:
                      agent_config["subagents"][agent]["model"] = model_name
+                     
+    agent_config["subagents"]["action_agent"]["connector"] = await _get_active_connector(db, workspace_id, "order_account")
     
     return agent_config
 
@@ -133,7 +156,7 @@ async def process_chat_turn(
                 "agent_config": agent_config_dict
             }
         }
-        return root_agent.invoke(state, config=config)
+        return get_root_agent().invoke(state, config=config)
 
     graph_result = await asyncio.to_thread(run_graph_sync)
     
@@ -210,7 +233,7 @@ async def process_chat_turn_streaming(
     subagent_results = {}
     
     # LangGraph astream_events requires version="v2"
-    async for event in root_agent.astream_events(state, config=config, version="v2"):
+    async for event in get_root_agent().astream_events(state, config=config, version="v2"):
         if event["event"] == "on_chat_model_stream":
             if event.get("metadata", {}).get("langgraph_node") == "synthesise":
                 chunk = event["data"]["chunk"]

@@ -24,55 +24,59 @@ class MCPToolClient:
         result = client.call("get_order_status", {"order_id": "ORD-123"})
     """
 
-    def __init__(self, server_path: str):
+    def __init__(self, server_path: Optional[str] = None, server_url: Optional[str] = None,
+                 auth_token: Optional[str] = None, extra_env: Optional[dict] = None):
+        if not server_path and not server_url:
+            raise ValueError("Must provide either server_path (stdio) or server_url (remote)")
         self.server_path = server_path
+        self.server_url = server_url
+        self.auth_token = auth_token
+        self.extra_env = extra_env or {}
+
+    def _normalize_result(self, result) -> dict:
+        if not result.content:
+            return {"success": False, "error": "MCP server returned no content."}
+
+        first = result.content[0]
+        if first.type == "error":
+            return {"success": False, "error": getattr(first, "text", str(first))}
+        if first.type == "text":
+            try:
+                return json.loads(first.text)
+            except json.JSONDecodeError as e:
+                return {"success": False, "error": f"Failed to parse MCP response as JSON: {e}"}
+
+        return {"success": False, "error": f"Unexpected content type from MCP server: {first.type}"}
 
     async def _call_async(self, tool_name: str, arguments: dict) -> dict:
-        """
-        Internal async implementation of a single MCP tool call.
+        from mcp import ClientSession
+        
+        if self.server_url:
+            from mcp.client.streamable_http import streamable_http_client
+            headers = {"Authorization": f"Bearer {self.auth_token}"} if self.auth_token else {}
+            async with streamable_http_client(self.server_url, headers=headers) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.call_tool(tool_name, arguments)
+                    return self._normalize_result(result)
+        else:
+            from mcp import StdioServerParameters
+            from mcp.client.stdio import stdio_client
 
-        Opens a fresh stdio session to the server subprocess, initialises the
-        MCP handshake, invokes the requested tool, and normalises the raw MCP
-        response into a plain dict with a ``success`` boolean.
+            env = os.environ.copy()
+            env.update(self.extra_env)
+            
+            server_params = StdioServerParameters(
+                command=sys.executable,
+                args=[self.server_path],
+                env=env
+            )
 
-        Args:
-            tool_name: Name of the MCP tool to invoke (must be registered on the server).
-            arguments: Keyword arguments forwarded verbatim to the tool.
-
-        Returns:
-            A dict containing the tool's JSON-decoded response on success, or a
-            ``{"success": False, "error": "<reason>"}`` dict on failure.
-        """
-        from mcp import ClientSession, StdioServerParameters
-        from mcp.client.stdio import stdio_client
-
-        server_params = StdioServerParameters(
-            command=sys.executable,
-            args=[self.server_path],
-            env=os.environ.copy()
-        )
-
-        async with stdio_client(server_params) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                result = await session.call_tool(tool_name, arguments)
-
-                if not result.content:
-                    return {"success": False, "error": "MCP server returned no content."}
-
-                first = result.content[0]
-
-                # Detect errors via content type, not .isError (unreliable across SDK versions)
-                if first.type == "error":
-                    return {"success": False, "error": getattr(first, "text", str(first))}
-
-                if first.type == "text":
-                    try:
-                        return json.loads(first.text)
-                    except json.JSONDecodeError as e:
-                        return {"success": False, "error": f"Failed to parse MCP response as JSON: {e}"}
-
-                return {"success": False, "error": f"Unexpected content type from MCP server: {first.type}"}
+            async with stdio_client(server_params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.call_tool(tool_name, arguments)
+                    return self._normalize_result(result)
 
     def call(self, tool_name: str, arguments: dict) -> dict:
         """

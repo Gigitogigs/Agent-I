@@ -15,6 +15,7 @@ from backend.api.schemas.settings import (
     IntegrationOut,
     IntegrationCreate
 )
+from backend.api.schemas.connectors import ConnectorCatalogEntry
 from backend.db.models.user import User
 from backend.services.settings_service import (
     get_notification_channels,
@@ -26,6 +27,7 @@ from backend.services.settings_service import (
     delete_integration,
     verify_integration
 )
+from backend.services.connector_service import list_connector_catalog
 from backend.db.models.settings import WorkspaceNotificationChannel
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/settings", tags=["settings"])
@@ -110,6 +112,14 @@ async def get_billing(
 # ---------------------------------------------------------------------------
 # Integrations
 # ---------------------------------------------------------------------------
+
+@router.get("/connector-catalog", response_model=List[ConnectorCatalogEntry])
+async def list_connector_catalog_route(
+    workspace_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    _membership = Depends(require_min_role("admin"))
+):
+    return await list_connector_catalog(db, workspace_id)
 
 @router.get("/integrations", response_model=List[IntegrationOut])
 async def list_integrations(

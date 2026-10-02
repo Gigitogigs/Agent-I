@@ -10,39 +10,34 @@ Exposes seven MCP tools covering order and customer account operations:
 - :func:`cancel_order` — cancel an unfulfilled order.
 - :func:`update_shipping_address` — change the delivery address on an order.
 
-The concrete backend adapter (Shopify or in-house) is selected at startup via
-the ``ADAPTER_TYPE`` environment variable (default: ``"inhouse"``).
+The concrete backend adapter (Shopify or in-house) is selected dynamically via
+the ``CONNECTOR_CONFIG`` environment variable payload.
 """
 import os
 import json
 from mcp.server.fastmcp import FastMCP as MCPServer
 
-from adapters.shopify_adapter import ShopifyAdapter
-from adapters.inhouse_adapter import InHouseAdapter
-from adapters.base import AdapterProtocol
+from support_system.mcp_servers.order_account_mcp.adapters.base import AdapterProtocol
 
 mcp = MCPServer("order-account-mcp")
 
-import sys
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from shared.shopify_client import SharedShopifyClient
-
 # --- Adapter Selection ---
-ADAPTER_TYPE = os.getenv("ADAPTER_TYPE", "inhouse")
+import sys
+import os
 
-adapter: AdapterProtocol
+# Add root directory to sys.path so we can import shared and support_system modules
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..')))
 
-if ADAPTER_TYPE == "shopify":
-    shopify_client = SharedShopifyClient(
-        shop_url=os.getenv("SHOPIFY_SHOP_URL", ""),
-        access_token=os.getenv("SHOPIFY_ACCESS_TOKEN", "")
-    )
-    adapter = ShopifyAdapter(client=shopify_client)
+import json
+from support_system.mcp_servers.shared.adapter_registry import build_adapter
+
+_raw = os.getenv("CONNECTOR_CONFIG")
+if _raw:
+    _cfg = json.loads(_raw)
+    adapter = build_adapter(_cfg["adapter_key"], _cfg["config"])
 else:
-    adapter = InHouseAdapter(
-        api_base_url=os.getenv("INHOUSE_API_BASE_URL", ""),
-        api_key=os.getenv("INHOUSE_API_KEY", "")
-    )
+    # Local dev / standalone fallback
+    adapter = build_adapter("inhouse", {"api_base_url": os.getenv("INHOUSE_API_BASE_URL",""), "api_key": os.getenv("INHOUSE_API_KEY","")})
 
 # --- MCP Tool Exposures ---
 @mcp.tool()

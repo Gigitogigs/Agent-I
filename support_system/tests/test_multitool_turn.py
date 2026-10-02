@@ -33,7 +33,9 @@ from typing import Optional
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
-from root_agent.graph import root_agent
+from root_agent.graph import get_root_agent
+
+root_agent = get_root_agent()
 
 
 # ---------------------------------------------------------------------------

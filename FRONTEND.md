@@ -96,3 +96,7 @@ WebSocket close codes:
 - `4001` — Unauthorized
 - `4003` — Conversation is closed/resolved
 - `4004` — Conversation not found
+
+
+## Connector Catalog Updates
+Added /connector-catalog endpoint for dynamic connector discovery. WorkspaceIntegration now includes domain and is_primary to isolate active connectors per domain.

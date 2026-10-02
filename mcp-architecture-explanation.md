@@ -226,3 +226,7 @@ risk-tier config are identical across every client.
 > that means calling a premade MCP server (Shopify), sometimes it means writing a plain
 > API/DB client from scratch (in-house systems). The agent only ever sees the canonical
 > contract, so nothing about it changes when the backend changes.
+
+
+## Connector Catalog Updates
+Added /connector-catalog endpoint for dynamic connector discovery. WorkspaceIntegration now includes domain and is_primary to isolate active connectors per domain.

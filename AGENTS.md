@@ -41,4 +41,4 @@ Each workspace stores its LLM configuration in `workspace_agent_config`:
 - `mode = "custom"`: Enables per-agent model overrides via `custom_models` (JSONB)
 - `custom_hitl_breakpoints`: List of action types that are always escalated regardless of the guardrail's risk assessment
 
-*Last verified against: `support_system/root_agent/graph.py`, `support_system/subagents/[action|escalation|retrieval]/graph.py`, `backend/services/chat_service.py` — 2026-09-28.*
+*Last verified against: `support_system/root_agent/graph.py`, `support_system/subagents/[action|escalation|retrieval]/graph.py`, `backend/services/chat_service.py` — 2026-10-02.*

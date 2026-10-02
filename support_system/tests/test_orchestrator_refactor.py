@@ -8,7 +8,9 @@ from langgraph.types import Command
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 from langchain_core.messages import HumanMessage
-from root_agent.graph import root_agent
+from root_agent.graph import get_root_agent
+
+root_agent = get_root_agent()
 
 def test_fan_out_integration():
     print("\n--- Running Fan-out Integration Test ---")

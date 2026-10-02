@@ -578,3 +578,7 @@ services:
 For larger deployments, the combined `worker` service can be split into individual containers per job type to allow independent scaling (e.g., scale up `ingestion` workers independently during bulk KB uploads without spinning up more notification workers).
 
 
+
+
+## Connector Catalog Updates
+Added /connector-catalog endpoint for dynamic connector discovery. WorkspaceIntegration now includes domain and is_primary to isolate active connectors per domain.

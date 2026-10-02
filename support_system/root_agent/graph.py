@@ -410,11 +410,16 @@ builder.add_edge("execute_tools", "prune_messages")
 builder.add_edge("synthesise", "save_memory")
 builder.add_edge("save_memory", END)
 
-root_agent = builder.compile(
-    checkpointer=get_checkpointer(),
-    store=get_store()
-)
+_root_agent = None
 
+def get_root_agent():
+    global _root_agent
+    if _root_agent is None:
+        _root_agent = builder.compile(
+            checkpointer=get_checkpointer(),
+            store=get_store()
+        )
+    return _root_agent
 
 def run_root():
     """
@@ -423,4 +428,4 @@ def run_root():
     Returns:
         The compiled LangGraph CompiledStateGraph instance.
     """
-    return root_agent
+    return get_root_agent()
