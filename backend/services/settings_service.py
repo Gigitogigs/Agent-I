@@ -241,6 +241,51 @@ async def create_integration(db: AsyncSession, workspace_id: UUID, data: dict) -
         "created_at": integration.created_at
     }
 
+async def update_integration(db: AsyncSession, workspace_id: UUID, integration_id: UUID, data: dict) -> dict:
+    integration = await db.scalar(select(WorkspaceIntegration).where(
+        WorkspaceIntegration.id == integration_id,
+        WorkspaceIntegration.workspace_id == workspace_id
+    ))
+    
+    if not integration:
+        raise HTTPException(status_code=404, detail="Integration not found")
+        
+    if "name" in data and data["name"] is not None:
+        integration.name = data["name"]
+        
+    if "config" in data and data["config"] is not None:
+        config_str = json.dumps(data["config"])
+        encrypted_config = encrypt_secret(config_str)
+        integration.config = {"encrypted_payload": encrypted_config}
+        integration.status = "pending"
+        
+    if data.get("is_primary") is True and integration.domain:
+        existing_stmt = select(WorkspaceIntegration).where(
+            WorkspaceIntegration.workspace_id == workspace_id,
+            WorkspaceIntegration.domain == integration.domain,
+            WorkspaceIntegration.id != integration_id,
+            WorkspaceIntegration.is_primary == True
+        )
+        existing_res = await db.execute(existing_stmt)
+        for old in existing_res.scalars().all():
+            old.is_primary = False
+        integration.is_primary = True
+
+    await db.commit()
+    await db.refresh(integration)
+    
+    return {
+        "id": integration.id,
+        "workspace_id": integration.workspace_id,
+        "integration_type": integration.integration_type,
+        "name": integration.name,
+        "domain": integration.domain,
+        "is_primary": integration.is_primary,
+        "status": integration.status,
+        "last_checked_at": integration.last_checked_at,
+        "created_at": integration.created_at
+    }
+
 async def delete_integration(db: AsyncSession, workspace_id: UUID, integration_id: UUID) -> None:
     integration = await db.scalar(select(WorkspaceIntegration).where(
         WorkspaceIntegration.id == integration_id,

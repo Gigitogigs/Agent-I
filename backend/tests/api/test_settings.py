@@ -195,3 +195,59 @@ async def test_is_primary_behavior(async_client, db_session):
     
     assert int1["is_primary"] is False
     assert int2["is_primary"] is True
+
+@pytest.mark.asyncio
+async def test_update_integration_config_and_name(async_client, db_session):
+    ws_id, token = await setup_test_workspace(db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    payload = {
+        "integration_type": "shopify",
+        "name": "My Store",
+        "config": {"store_url": "https://mystore.myshopify.com", "access_token": "shpat_123"}
+    }
+    create_res = await async_client.post(f"/workspaces/{ws_id}/settings/integrations", json=payload, headers=headers)
+    assert create_res.status_code == 201
+    int_id = create_res.json()["id"]
+
+    update_payload = {
+        "name": "My Store Updated",
+        "config": {"store_url": "https://mystore.myshopify.com", "access_token": "shpat_456"}
+    }
+    update_res = await async_client.patch(f"/workspaces/{ws_id}/settings/integrations/{int_id}", json=update_payload, headers=headers)
+    assert update_res.status_code == 200
+    assert update_res.json()["name"] == "My Store Updated"
+    assert update_res.json()["status"] == "pending"
+
+@pytest.mark.asyncio
+async def test_update_integration_is_primary_flip(async_client, db_session):
+    ws_id, token = await setup_test_workspace(db_session)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    payload1 = {
+        "integration_type": "shopify",
+        "name": "My Store 1",
+        "config": {"store_url": "https://store1.myshopify.com", "access_token": "shpat_123"}
+    }
+    res1 = await async_client.post(f"/workspaces/{ws_id}/settings/integrations", json=payload1, headers=headers)
+    id1 = res1.json()["id"]
+
+    payload2 = {
+        "integration_type": "shopify",
+        "name": "My Store 2",
+        "config": {"store_url": "https://store2.myshopify.com", "access_token": "shpat_456"}
+    }
+    res2 = await async_client.post(f"/workspaces/{ws_id}/settings/integrations", json=payload2, headers=headers)
+    id2 = res2.json()["id"]
+
+    # At this point, id2 is primary, id1 is not
+    # Flip id1 back to primary
+    update_res = await async_client.patch(f"/workspaces/{ws_id}/settings/integrations/{id1}", json={"is_primary": True}, headers=headers)
+    assert update_res.status_code == 200
+
+    list_res = await async_client.get(f"/workspaces/{ws_id}/settings/integrations", headers=headers)
+    int1 = next(i for i in list_res.json() if i["id"] == id1)
+    int2 = next(i for i in list_res.json() if i["id"] == id2)
+
+    assert int1["is_primary"] is True
+    assert int2["is_primary"] is False

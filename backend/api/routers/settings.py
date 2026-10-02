@@ -13,7 +13,8 @@ from backend.api.schemas.settings import (
     NotificationChannelUpdate,
     BillingDetailsOut,
     IntegrationOut,
-    IntegrationCreate
+    IntegrationCreate,
+    IntegrationUpdate
 )
 from backend.api.schemas.connectors import ConnectorCatalogEntry
 from backend.db.models.user import User
@@ -24,6 +25,7 @@ from backend.services.settings_service import (
     get_billing_details,
     get_integrations,
     create_integration,
+    update_integration,
     delete_integration,
     verify_integration
 )
@@ -137,6 +139,16 @@ async def add_integration(
     _membership = Depends(require_min_role("admin"))
 ):
     return await create_integration(db, workspace_id, body.model_dump())
+
+@router.patch("/integrations/{integration_id}", response_model=IntegrationOut)
+async def modify_integration(
+    workspace_id: UUID,
+    integration_id: UUID,
+    body: IntegrationUpdate,
+    db: AsyncSession = Depends(get_db),
+    _membership = Depends(require_min_role("admin"))
+):
+    return await update_integration(db, workspace_id, integration_id, body.model_dump(exclude_unset=True))
 
 @router.delete("/integrations/{integration_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_integration(

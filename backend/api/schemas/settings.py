@@ -94,6 +94,11 @@ class IntegrationCreate(BaseModel):
             raise ValueError(f"{self.integration_type} config missing keys: {missing}")
         return self
 
+class IntegrationUpdate(BaseModel):
+    name: Optional[str] = None
+    config: Optional[Dict[str, Any]] = None
+    is_primary: Optional[bool] = None
+
 class IntegrationOut(BaseModel):
     id: UUID
     workspace_id: UUID
